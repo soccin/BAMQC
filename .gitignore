@@ -1,0 +1,6 @@
+*.sif
+SLM/
+.Rhistory
+_Rhistory_*
+*.pyc
+__pycache__/
