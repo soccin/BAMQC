@@ -8,7 +8,7 @@
 ## Concordance and contamination for every sample in OUTDIR/manifest.tsv
 ## (conpairCohort.py, in the container), then the report (conpairReport.R,
 ## host R). Submitted by runConpairCohort.sh after the pileups finish; can
-## also be resubmitted by hand.
+## also be resubmitted by hand, outside the run's record.
 ##
 
 set -euo pipefail
