@@ -6,15 +6,14 @@
 ## one job, dependent on it, for the concordance, contamination and report.
 ## Runs nothing heavy itself, so it is safe on a login node.
 ##
-## The jobs are submitted through slurmTools, which records the run in
-## OUTDIR/SLM/<RUN_ID> and adds a status job: once every job has ended it
-## checks their SLURM states and the outputs (conpairVerify.sh), writes
-## OUTDIR/RUNSTATUS.txt and mails the user.
+## slurmTools records the jobs in OUTDIR/SLM/<RUN_ID> and adds a status
+## job: once every job has ended it checks their SLURM states and the
+## outputs (conpairVerify.sh), writes OUTDIR/RUNSTATUS.txt and mails the
+## user.
 ##
 
 set -euo pipefail
 
-COMMAND=("$0" "$@")
 SDIR=$(dirname "$(readlink -f "$0")")
 REPO=$(dirname "$(dirname "$SDIR")")
 VERSION=$(cat "$SDIR/../VERSION")
@@ -22,12 +21,10 @@ VERSION=$(cat "$SDIR/../VERSION")
 . "$SDIR/conpairMarkers.sh"
 
 SLURMTOOLS_DIR=${SLURMTOOLS_DIR:-$(dirname "$REPO")/slurmTools}
-if [ ! -f "$SLURMTOOLS_DIR/lib/slurmTools.sh" ]; then
+if [ ! -f "$SLURMTOOLS_DIR/slurmTools.sh" ]; then
     echo -e "\n    ERROR: slurmTools not found in $SLURMTOOLS_DIR; set SLURMTOOLS_DIR\n" >&2
     exit 1
 fi
-# shellcheck source-path=SCRIPTDIR source=../../../slurmTools/lib/slurmTools.sh
-. "$SLURMTOOLS_DIR/lib/slurmTools.sh"
 
 CONTAINER="${CONPAIR_SIF:-/home/soccin/Code/ConPair/conpair_v0.3.3.sif}"
 PARTITION=""
@@ -77,7 +74,6 @@ state, then the outputs. Its verdict, OK or FAILED, goes to
 OUTDIR/RUNSTATUS.txt and SLURM mails \$USER@mskcc.org when it ends
 (\$SLURMTOOLS_MAIL overrides; empty for no mail). Check by hand with
 $SLURMTOOLS_DIR/bin/checkRun.sh OUTDIR
-A new run is refused while the last run in OUTDIR still has jobs queued.
 
 EOF
     exit 1
@@ -111,8 +107,6 @@ case "$OUTDIR/" in
     /localscratch/*|/tmp/*)
         die "output directory is node-local; the jobs on other nodes cannot see it: $OUTDIR" ;;
 esac
-## Before anything is written: the jobs of a running run read OUTDIR.
-runGuard "$OUTDIR"
 [ -f "$MANIFEST" ] || die "manifest not found: $MANIFEST"
 [ -f "$CONTAINER" ] || die "container not found: $CONTAINER"
 command -v samtools > /dev/null || die "samtools not on PATH (needed to read BAM headers)"
@@ -243,9 +237,6 @@ MARKER_SETS=$(for B in "${!BUILD_COUNT[@]}"; do echo "${MARKERS_OF[$B]}"; done |
 ## Copied with a redirect, not mv: mktemp files are mode 600, and the
 ## output directory is usually shared with a group.
 cat "$NEWMANIFEST" > "$OUTDIR/manifest.tsv"
-rm -f "$NEWMANIFEST"
-## runInit sets its own EXIT trap.
-trap - EXIT
 mkdir -p "$OUTDIR/pileup"
 
 PARTITION_ARGS=()
@@ -254,25 +245,25 @@ if [ -n "$PARTITION" ]; then
     export SLURMTOOLS_PARTITION=$PARTITION
 fi
 
-##
-## From here on a failed submission cancels the jobs already submitted.
-## The logs go into the run directory, RUN_DIR.
-##
-runInit "$OUTDIR" conpair "$VERSION" "${COMMAND[@]}"
+## Starts the run (RUN_DIR) and records every sbatch below.
+# shellcheck source-path=SCRIPTDIR source=../../../slurmTools/slurmTools.sh
+. "$SLURMTOOLS_DIR/slurmTools.sh" "$OUTDIR"
 
-runSubmit conpairPileup --array "1-$N" \
+PILEUP_JOB=$(sbatch --parsable \
+    --array "1-$N" \
+    --output "$RUN_DIR/conpairPileup.%A_%a.out" \
     --export "ALL,SBATCH_SCRIPT_DIR=$SDIR" \
     "${PARTITION_ARGS[@]}" \
-    -- "$SDIR/conpairPileup.sh" "$OUTDIR" "$CONTAINER"
-PILEUP_JOB=$RUN_JOBID
+    "$SDIR/conpairPileup.sh" "$OUTDIR" "$CONTAINER")
 
-runSubmit conpairAnalyze --dependency "afterok:$PILEUP_JOB" \
+ANALYZE_JOB=$(sbatch --parsable \
+    --dependency "afterok:$PILEUP_JOB" \
+    --output "$RUN_DIR/conpairAnalyze.%j.out" \
     --export "ALL,SBATCH_SCRIPT_DIR=$SDIR" \
     "${PARTITION_ARGS[@]}" \
-    -- "$SDIR/conpairAnalyze.sh" "$OUTDIR" "$CONTAINER"
-ANALYZE_JOB=$RUN_JOBID
+    "$SDIR/conpairAnalyze.sh" "$OUTDIR" "$CONTAINER")
 
-runFinish "$SDIR/conpairVerify.sh" "$OUTDIR" "$RUN_DIR/START"
+slurmFinish "$SDIR/conpairVerify.sh" "$OUTDIR" "$RUN_DIR/START"
 
 echo
 echo "runConpairCohort.sh $VERSION"

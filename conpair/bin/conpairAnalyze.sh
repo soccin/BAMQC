@@ -13,13 +13,6 @@
 
 set -euo pipefail
 
-## Exit status line at the end of the log, for slurmTools' checkRun.sh.
-## SLURMTOOLS_DIR is exported by runConpairCohort.sh.
-if [ -n "${SLURMTOOLS_DIR:-}" ]; then
-    # shellcheck source-path=SCRIPTDIR source=../../../slurmTools/lib/jobTrailer.sh
-    . "$SLURMTOOLS_DIR/lib/jobTrailer.sh"
-fi
-
 if [ -n "${SBATCH_SCRIPT_DIR:-}" ]; then
     SDIR="${SBATCH_SCRIPT_DIR}"
 else
