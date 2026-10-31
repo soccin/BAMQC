@@ -7,7 +7,7 @@ rather than one sample or one pair at a time.
 
 | Tool | Question it answers | Status |
 |---|---|---|
-| [`conpair/`](conpair/README.md) | Which samples come from the same individual, and how contaminated is each sample? | 0.4.0 |
+| [`conpair/`](conpair/README.md) | Which samples come from the same individual, and how contaminated is each sample? | 0.4.1 |
 
 ## Layout
 
@@ -35,7 +35,7 @@ table is an error; add its md5 (printed in the error) to the table.
 
 - SLURM (`sbatch`), apptainer/singularity, samtools, R 4.5 with
   tidyverse, fs, glue, igraph, ComplexHeatmap and circlize.
-- slurmTools, which submits each tool's jobs, records the run and checks
+- slurmTools, which records each run's jobs and checks
   that every job succeeded. It is looked for in `$SLURMTOOLS_DIR`, else in
   `slurmTools/` beside this repository.
 - Tool-specific containers are listed in each tool's README. Containers are

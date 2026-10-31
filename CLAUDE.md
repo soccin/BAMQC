@@ -24,10 +24,12 @@ Shared pieces at the top level:
 
 No tool takes a genome argument. The build always comes from the BAM header.
 
-Every tool submits its jobs through slurmTools, a separate repository found
-in `$SLURMTOOLS_DIR`, else `../slurmTools` beside this one. Its README
-describes the launcher functions (`runGuard`, `runInit`, `runSubmit`,
-`runFinish`) and the rules for job scripts. A run is OK only when every task
+Every launcher uses slurmTools, a separate repository found in
+`$SLURMTOOLS_DIR`, else `../slurmTools` beside this one. Sourcing its
+`slurmTools.sh OUTDIR` records every later `sbatch` call (a bash function
+wraps it), and `slurmFinish VERIFY...` adds the status job; see its
+README. Call `sbatch` in the launcher's own shell, not from a separate
+script, or the job is not recorded. A run is OK only when every task
 ended `COMPLETED` in `sacct` and the tool's output check passes, so each
 tool needs an output check that fails on missing, partial or stale outputs.
 
@@ -39,8 +41,7 @@ The pipeline is split across host and container, and across SLURM jobs:
    detects each BAM's build, picks FASTA and markers, writes the normalized
    `OUTDIR/manifest.tsv` (`sample, bam, individual, build, fasta`), then
    submits the jobs through slurmTools. All later steps read that
-   normalized manifest, never the user's. `runGuard` runs before anything
-   is written into `OUTDIR`, because the jobs of an active run read it.
+   normalized manifest, never the user's.
 2. `conpairPileup.sh`: SLURM array, one task per manifest row
    (`SLURM_ARRAY_TASK_ID` = row). Runs Conpair's GATK pileup script in the
    container. That script ignores GATK's exit status, so success is checked

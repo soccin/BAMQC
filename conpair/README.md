@@ -63,9 +63,8 @@ a run at any time (`runConpairCohort.sh` prints the full path):
 $SLURMTOOLS_DIR/bin/checkRun.sh OUTDIR
 ```
 
-A new run into an `OUTDIR` whose last run still has jobs queued is refused.
-If the submission itself fails part way, the jobs already submitted are
-cancelled.
+Do not start a second run into an `OUTDIR` while one is still running: both
+would write the same files.
 
 `MANIFEST` is a TSV or CSV file with a header. A tab in the header line means
 TSV, otherwise a comma means CSV; the file name does not matter. Fields may
