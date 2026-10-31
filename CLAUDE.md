@@ -36,8 +36,9 @@ The pipeline is split across host and container, and across SLURM jobs:
 2. `conpairPileup.sh`: SLURM array, one task per manifest row
    (`SLURM_ARRAY_TASK_ID` = row). Runs Conpair's GATK pileup script in the
    container. That script ignores GATK's exit status, so success is checked
-   by the trailing `[REDUCE RESULT]` line. Existing pileups newer than the
-   BAM are reused.
+   by the trailing `[REDUCE RESULT]` line. A pileup is reused when
+   `pileup/<sample>.fingerprint` (BAM size plus md5 of its first and last
+   4 MB) still matches the BAM, so moved BAMs keep their pileups.
 3. `conpairAnalyze.sh`: depends `afterok` on the array. Runs
    `conpairCohort.py` inside the container, then `conpairReport.R` on the
    host.
@@ -72,8 +73,11 @@ Constraints that are easy to break:
 Run a cohort (from the login node; it only submits):
 
 ```
-conpair/bin/runConpairCohort.sh --manifest FILE --out DIR [--container SIF] [--partition LIST]
+conpair/bin/runConpairCohort.sh [-c FILE] [-p LIST] [-o OUTDIR] MANIFEST
 ```
+
+`OUTDIR` defaults to `./qc/conpair` and may not be under `/localscratch`
+or `/tmp`.
 
 Rerun only the report with other thresholds:
 
@@ -109,3 +113,6 @@ committed.
   `README.md` tool table lists the current version.
 - Shell scripts: `set -euo pipefail`, a `##` header block explaining what
   the script does, `die`/`ERROR:` messages to stderr.
+- Command lines follow the Unix convention: required inputs are
+  positional arguments, options are optional and have defaults. Do not
+  copy the required-named-option style of bioinformatics tools.
