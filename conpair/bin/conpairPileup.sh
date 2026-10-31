@@ -7,8 +7,9 @@
 ##
 ## One SLURM array task: GATK 3 Pileup at the Conpair markers for row
 ## SLURM_ARRAY_TASK_ID of OUTDIR/manifest.tsv, run through Conpair's own
-## run_gatk_pileup_for_sample.py in the container. Submitted by
-## runConpairCohort.sh.
+## run_gatk_pileup_for_sample.py in the container. The BAM's build and
+## reference FASTA come from the manifest, written by runConpairCohort.sh,
+## which submits this script.
 ##
 
 set -euo pipefail
@@ -18,33 +19,34 @@ if [ -n "${SBATCH_SCRIPT_DIR:-}" ]; then
 else
     SDIR=$(dirname "$(readlink -f "$0")")
 fi
+# shellcheck source-path=SCRIPTDIR source=conpairMarkers.sh
+. "$SDIR/conpairMarkers.sh"
 
-if [ "$#" != "4" ]; then
-    echo -e "\n   usage: sbatch --array 1-N conpairPileup.sh OUTDIR GENOME FASTA CONTAINER\n"
+if [ "$#" != "2" ]; then
+    echo -e "\n   usage: sbatch --array 1-N conpairPileup.sh OUTDIR CONTAINER\n"
     exit 1
 fi
 
 OUTDIR=$1
-GENOME=$2
-FASTA=$3
-CONTAINER=$4
+CONTAINER=$2
 TASK=${SLURM_ARRAY_TASK_ID:?must run as a SLURM array task}
 
 ROW=$(awk -F'\t' -v n=$((TASK + 1)) 'NR==n' "$OUTDIR/manifest.tsv")
 SAMPLE=$(cut -f1 <<< "$ROW")
 BAM=$(cut -f2 <<< "$ROW")
+BUILD=$(cut -f4 <<< "$ROW")
+FASTA=$(cut -f5 <<< "$ROW")
 [ -n "$SAMPLE" ] || { echo "ERROR: no manifest row for task $TASK" >&2; exit 1; }
 
-MARKERS_DIR=/usr/bin/conpair/data/markers
-case "$GENOME" in
-    GRCh37) MARKERS_BED=$MARKERS_DIR/GRCh37.autosomes.phase3_shapeit2_mvncall_integrated.20130502.SNV.genotype.sselect_v4_MAF_0.4_LD_0.8.bed ;;
-    GRCh38) MARKERS_BED=$MARKERS_DIR/GRCh38.autosomes.phase3_shapeit2_mvncall_integrated.20130502.SNV.genotype.sselect_v4_MAF_0.4_LD_0.8.liftover.bed ;;
-    *) echo "ERROR: unknown genome [$GENOME]" >&2; exit 1 ;;
-esac
+MARKERS=$(conpairMarkers "$BUILD") \
+    || { echo "ERROR: Conpair has no markers for build [$BUILD]" >&2; exit 1; }
+MARKERS_BED=$MARKERS.bed
 
 PILEUP=$OUTDIR/pileup/$SAMPLE.pileup
 echo "Start: conpairPileup $SAMPLE $(date)"
 echo "  bam     $BAM"
+echo "  build   $BUILD"
+echo "  fasta   $FASTA"
 echo "  output  $PILEUP"
 echo "  bin     $SDIR"
 
