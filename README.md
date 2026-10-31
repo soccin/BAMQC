@@ -7,7 +7,7 @@ rather than one sample or one pair at a time.
 
 | Tool | Question it answers | Status |
 |---|---|---|
-| [`conpair/`](conpair/README.md) | Which samples come from the same individual, and how contaminated is each sample? | 0.3.0 |
+| [`conpair/`](conpair/README.md) | Which samples come from the same individual, and how contaminated is each sample? | 0.4.2 |
 
 ## Layout
 
@@ -15,6 +15,7 @@ rather than one sample or one pair at a time.
 bin/getGenomeBuildBAM.sh  genome build of a BAM, from its @SQ header lines
 bin/getGenomeFasta.sh     reference FASTA on IRIS for a build
 R/palettes.R              color palettes shared by every tool's figures
+slurmTools/               copy of slurmTools: did every SLURM job of a run succeed?
 conpair/                  cohort-wide Conpair: sample identity and contamination
 ```
 
@@ -30,6 +31,15 @@ looked up in a table of known references. `bin/getGenomeFasta.sh` then
 gives the reference FASTA for that build and checks that the FASTA's
 `.dict` hashes to the same build. A BAM on a reference that is not in the
 table is an error; add its md5 (printed in the error) to the table.
+
+## slurmTools
+
+`slurmTools/` is a copy of [slurmTools](https://github.com/soccin/slurmTools),
+version in `slurmTools/VERSION`. Every tool's launcher uses it to record its
+jobs and to check, once they end, that all of them succeeded; see
+`slurmTools/README.md`. Do not edit the copy: change slurmTools itself, then
+copy its files (all but `.git`) over this directory. `$SLURMTOOLS_DIR`
+overrides the copy, e.g. to test a newer slurmTools.
 
 ## Requirements
 

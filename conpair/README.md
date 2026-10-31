@@ -18,6 +18,7 @@ bin/conpairPileup.sh       SLURM array task: GATK Pileup at the markers, one BAM
 bin/conpairAnalyze.sh      SLURM job: conpairCohort.py, then conpairReport.R
 bin/conpairCohort.py       concordance and contamination, in the container
 bin/conpairReport.R        groups, flags, tables, PDF
+bin/conpairVerify.sh       output check, run by the status job
 tests/compareWithConpair.sh  checks one pair against Conpair's stock scripts
 VERSION
 ```
@@ -32,6 +33,37 @@ Run it on the login node; it only checks inputs and calls `sbatch`.
 `OUTDIR` defaults to `./qc/conpair`. It must be on shared storage: an
 `OUTDIR` under `/localscratch` or `/tmp` is rejected, because the jobs on
 other nodes cannot see it.
+
+### Knowing that a run is done and correct
+
+The jobs are recorded by [slurmTools](../slurmTools/README.md), the copy
+in `BAMQC/slurmTools/` (`$SLURMTOOLS_DIR` overrides). Each run is recorded in
+`OUTDIR/SLM/<RUN_ID>/`, with its logs. A last status job starts once every
+job has ended, whatever their state. It checks each job's SLURM state, then,
+if all completed, the outputs (`bin/conpairVerify.sh`):
+
+- every sample in the manifest has a finished pileup (closing
+  `[REDUCE RESULT]` line) and its fingerprint;
+- every table has one row per sample, or per pair, for exactly the
+  manifest's samples: N rows in the per-sample tables, N(N-1) in
+  `conpair_concordance.tsv`, N(N-1)/2 in `conpair_pairs.tsv`;
+- `conpair_run.tsv` has this version and N samples;
+- the text report is not empty and the PDF is complete;
+- every table and report was written by this run, not left by an earlier
+  one. Pileups are exempt, since unchanged ones are reused.
+
+The verdict, `OK` or `FAILED` with the reason, goes to
+`OUTDIR/RUNSTATUS.txt`, and SLURM mails `$USER@mskcc.org` when the status
+job ends (`SLURMTOOLS_MAIL` sets another address; empty for no mail). The
+mail only says the run is done; read the verdict in `RUNSTATUS.txt`. To check
+a run at any time (`runConpairCohort.sh` prints the full path):
+
+```
+$SLURMTOOLS_DIR/bin/checkRun.sh OUTDIR
+```
+
+Do not start a second run into an `OUTDIR` while one is still running: both
+would write the same files.
 
 `MANIFEST` is a TSV or CSV file with a header. A tab in the header line means
 TSV, otherwise a comma means CSV; the file name does not matter. Fields may
@@ -97,6 +129,8 @@ Rscript bin/conpairReport.R OUTDIR [--related 80] [--contam-warn 2] [--contam-fa
    depth, run in parallel on the job's CPUs). Conpair's
    `run_estimate_tumor_normal_contamination` is called directly.
 4. **Report** (seconds, host R).
+5. **Status** (seconds). The slurmTools status job: job states, then
+   `conpairVerify.sh`; see above.
 
 ## Method
 
@@ -201,7 +235,8 @@ Written into `OUTDIR`:
 | `conpair_pairs.tsv` | One row per pair: identity, both directions, status |
 | `conpair_report.txt` | Text report |
 | `conpair_report.pdf` | Concordance heatmaps (homozygous-marker and all-marker) and contamination plot |
-| `SLM/` | SLURM logs |
+| `RUNSTATUS.txt` | Verdict on the newest run: `OK`, `FAILED`, `RUNNING`, ... and why |
+| `SLM/<RUN_ID>/` | One run: its record (`RUNINFO`, `jobs.tsv`), SLURM logs, `RUNSTATUS.txt` and the report behind it, `checkRun.txt` |
 | `tmp/` | Java temporary space for the pileups; empty after a successful run |
 
 All of these carry sample names. They stay in `OUTDIR`, outside the
