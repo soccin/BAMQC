@@ -19,28 +19,34 @@ else
     SDIR=$(dirname "$(readlink -f "$0")")
 fi
 REPO=$(dirname "$(dirname "$SDIR")")
+# shellcheck source-path=SCRIPTDIR source=conpairMarkers.sh
+. "$SDIR/conpairMarkers.sh"
 
-if [ "$#" != "3" ]; then
-    echo -e "\n   usage: sbatch conpairAnalyze.sh OUTDIR GENOME CONTAINER\n"
+if [ "$#" != "2" ]; then
+    echo -e "\n   usage: sbatch conpairAnalyze.sh OUTDIR CONTAINER\n"
     exit 1
 fi
 
 OUTDIR=$1
-GENOME=$2
-CONTAINER=$3
+CONTAINER=$2
 
-MARKERS_DIR=/usr/bin/conpair/data/markers
-case "$GENOME" in
-    GRCh37) MARKERS_TXT=$MARKERS_DIR/GRCh37.autosomes.phase3_shapeit2_mvncall_integrated.20130502.SNV.genotype.sselect_v4_MAF_0.4_LD_0.8.txt ;;
-    GRCh38) MARKERS_TXT=$MARKERS_DIR/GRCh38.autosomes.phase3_shapeit2_mvncall_integrated.20130502.SNV.genotype.sselect_v4_MAF_0.4_LD_0.8.liftover.txt ;;
-    *) echo "ERROR: unknown genome [$GENOME]" >&2; exit 1 ;;
-esac
+## The markers follow from the builds in the manifest; runConpairCohort.sh
+## has already checked that they all share one marker set.
+MARKER_SETS=$(tail -n +2 "$OUTDIR/manifest.tsv" | cut -f4 | sort -u \
+    | while read -r BUILD; do conpairMarkers "$BUILD" || echo "none:$BUILD"; done | sort -u)
+if [ "$(wc -l <<< "$MARKER_SETS")" -ne 1 ] || [[ "$MARKER_SETS" == none:* ]]; then
+    echo "ERROR: the manifest builds do not share one Conpair marker set:" >&2
+    echo "$MARKER_SETS" >&2
+    exit 1
+fi
+MARKERS_TXT=$MARKER_SETS.txt
 
 command -v Rscript > /dev/null || { echo "ERROR: Rscript not on PATH" >&2; exit 1; }
 
 echo "Start: conpairAnalyze $(date)"
-echo "  output  $OUTDIR"
-echo "  bin     $SDIR"
+echo "  output   $OUTDIR"
+echo "  markers  $MARKERS_TXT"
+echo "  bin      $SDIR"
 
 singularity exec --cleanenv \
     --bind "$OUTDIR" \

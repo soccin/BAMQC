@@ -1,18 +1,20 @@
 #!/bin/bash
 ##
-## Cohort-wide Conpair. Checks the manifest, then submits one SLURM array
-## job for the per-BAM pileups and one job, dependent on it, for the
-## concordance, contamination and report. Runs nothing heavy itself, so it
-## is safe on a login node.
+## Cohort-wide Conpair. Checks the manifest, reads each BAM's genome build
+## from its header and picks the reference FASTA and Conpair markers from
+## the build, then submits one SLURM array job for the per-BAM pileups and
+## one job, dependent on it, for the concordance, contamination and report.
+## Runs nothing heavy itself, so it is safe on a login node.
 ##
 
 set -euo pipefail
 
 SDIR=$(dirname "$(readlink -f "$0")")
+REPO=$(dirname "$(dirname "$SDIR")")
 VERSION=$(cat "$SDIR/../VERSION")
+# shellcheck source-path=SCRIPTDIR source=conpairMarkers.sh
+. "$SDIR/conpairMarkers.sh"
 
-GENOME="GRCh37"
-FASTA=""
 CONTAINER="${CONPAIR_SIF:-/home/soccin/Code/ConPair/conpair_v0.3.3.sif}"
 PARTITION=""
 MANIFEST=""
@@ -36,16 +38,16 @@ Required:
   -o, --out DIR         Output directory, on shared storage.
 
 Options:
-  -g, --genome NAME     GRCh37 (default) or GRCh38. Selects the Conpair
-                        markers and the default reference.
-  -f, --fasta FILE      Reference FASTA the BAMs were aligned to, with .fai
-                        and .dict. Default: the IRIS igenomes GATK FASTA for
-                        the genome.
   -c, --container FILE  Conpair container. Default: \$CONPAIR_SIF, else
                         /home/soccin/Code/ConPair/conpair_v0.3.3.sif
   -p, --partition LIST  SLURM partition(s) for both jobs. Default: the
                         #SBATCH value in each job script.
   -h, --help            Show this message and exit.
+
+The genome build of each BAM is read from its header
+(bin/getGenomeBuildBAM.sh); the build selects the reference FASTA
+(bin/getGenomeFasta.sh) and the Conpair markers. BAMs on different builds
+can be mixed only when they share the markers (e.g. b37 and GRCh37-lite).
 
 Pileups already in DIR/pileup and newer than their BAM are reused, so a
 rerun after adding samples only piles up the new ones.
@@ -54,16 +56,14 @@ EOF
     exit 1
 }
 
-ARGS=$(getopt -o 'm:o:g:f:c:p:h' \
-    --long 'manifest:,out:,genome:,fasta:,container:,partition:,help' \
+ARGS=$(getopt -o 'm:o:c:p:h' \
+    --long 'manifest:,out:,container:,partition:,help' \
     -n 'runConpairCohort.sh' -- "$@") || usage
 eval set -- "$ARGS"
 while true; do
     case "$1" in
         -m|--manifest)  MANIFEST="$2"; shift 2 ;;
         -o|--out)       OUTDIR="$2"; shift 2 ;;
-        -g|--genome)    GENOME="$2"; shift 2 ;;
-        -f|--fasta)     FASTA="$2"; shift 2 ;;
         -c|--container) CONTAINER="$2"; shift 2 ;;
         -p|--partition) PARTITION="$2"; shift 2 ;;
         -h|--help)      usage ;;
@@ -81,23 +81,13 @@ die() {
 [ -n "$OUTDIR" ] || usage
 [ -f "$MANIFEST" ] || die "manifest not found: $MANIFEST"
 [ -f "$CONTAINER" ] || die "container not found: $CONTAINER"
-
-IGENOMES=/data1/core001/rsrc/genomic/mskcc-igenomes/igenomes/Homo_sapiens/GATK
-case "$GENOME" in
-    GRCh37) DEFAULT_FASTA=$IGENOMES/GRCh37/Sequence/WholeGenomeFasta/human_g1k_v37_decoy.fasta ;;
-    GRCh38) DEFAULT_FASTA=$IGENOMES/GRCh38/Sequence/WholeGenomeFasta/Homo_sapiens_assembly38.fasta ;;
-    *) die "genome must be GRCh37 or GRCh38, got [$GENOME]" ;;
-esac
-FASTA=$(readlink -f "${FASTA:-$DEFAULT_FASTA}")
-[ -f "$FASTA" ] || die "reference not found: $FASTA"
-[ -f "$FASTA.fai" ] || die "reference index not found: $FASTA.fai"
-[ -f "${FASTA%.*}.dict" ] || die "reference dictionary not found: ${FASTA%.*}.dict"
+command -v samtools > /dev/null || die "samtools not on PATH (needed to read BAM headers)"
 CONTAINER=$(readlink -f "$CONTAINER")
 
 ##
-## Check the manifest and write a normalized copy (absolute BAM paths,
-## always three columns) into the output directory. Every job reads that
-## copy, never the original.
+## Check the manifest and write a normalized copy into the output
+## directory: absolute BAM paths, always the columns sample, bam,
+## individual, build, fasta. Every job reads that copy, never the original.
 ##
 colIndex() {
     head -1 "$MANIFEST" | tr -d '\r' \
@@ -114,8 +104,8 @@ OUTDIR=$(readlink -f "$OUTDIR")
 NEWMANIFEST=$(mktemp "$OUTDIR/.manifest.XXXXXX")
 trap 'rm -f "$NEWMANIFEST"' EXIT
 
-printf 'sample\tbam\tindividual\n' > "$NEWMANIFEST"
-declare -A SEEN
+printf 'sample\tbam\tindividual\tbuild\tfasta\n' > "$NEWMANIFEST"
+declare -A SEEN FASTA_OF MARKERS_OF BUILD_COUNT
 ERRORS=0
 LINENO_=1
 while IFS= read -r LINE || [ -n "$LINE" ]; do
@@ -142,12 +132,31 @@ while IFS= read -r LINE || [ -n "$LINE" ]; do
     if [ ! -f "$REALBAM.bai" ] && [ ! -f "${REALBAM%.bam}.bai" ]; then
         echo "    line $LINENO_: no index beside [$REALBAM]" >&2; ERRORS=$((ERRORS + 1)); continue
     fi
-    printf '%s\t%s\t%s\n' "$SAMPLE" "$REALBAM" "$INDIVIDUAL" >> "$NEWMANIFEST"
+    if ! BUILD=$("$REPO/bin/getGenomeBuildBAM.sh" "$REALBAM" 2>&1); then
+        echo "    line $LINENO_: genome build not recognized [$BUILD] for [$REALBAM]" >&2; ERRORS=$((ERRORS + 1)); continue
+    fi
+    ## Looked up once per build; getGenomeFasta.sh reports its own errors.
+    if [ -z "${FASTA_OF[$BUILD]+set}" ]; then
+        FASTA_OF[$BUILD]=$("$REPO/bin/getGenomeFasta.sh" "$BUILD") || FASTA_OF[$BUILD]=""
+        MARKERS_OF[$BUILD]=$(conpairMarkers "$BUILD") || MARKERS_OF[$BUILD]=""
+    fi
+    if [ -z "${FASTA_OF[$BUILD]}" ]; then
+        echo "    line $LINENO_: no reference FASTA for build [$BUILD] of [$REALBAM]" >&2; ERRORS=$((ERRORS + 1)); continue
+    fi
+    if [ -z "${MARKERS_OF[$BUILD]}" ]; then
+        echo "    line $LINENO_: Conpair has no markers for build [$BUILD] of [$REALBAM]" >&2; ERRORS=$((ERRORS + 1)); continue
+    fi
+    BUILD_COUNT[$BUILD]=$(( ${BUILD_COUNT[$BUILD]:-0} + 1 ))
+    printf '%s\t%s\t%s\t%s\t%s\n' "$SAMPLE" "$REALBAM" "$INDIVIDUAL" "$BUILD" "${FASTA_OF[$BUILD]}" >> "$NEWMANIFEST"
 done < <(tail -n +2 "$MANIFEST")
 
 [ "$ERRORS" -eq 0 ] || die "$ERRORS manifest error(s), nothing submitted"
 N=$(( $(wc -l < "$NEWMANIFEST") - 1 ))
 [ "$N" -ge 2 ] || die "need at least 2 samples, found $N"
+
+MARKER_SETS=$(for B in "${!BUILD_COUNT[@]}"; do echo "${MARKERS_OF[$B]}"; done | sort -u)
+[ "$(wc -l <<< "$MARKER_SETS")" -eq 1 ] \
+    || die "the BAMs are on builds with different Conpair markers (${!BUILD_COUNT[*]}); run them separately"
 
 ## Copied with a redirect, not mv: mktemp files are mode 600, and the
 ## output directory is usually shared with a group.
@@ -162,21 +171,23 @@ PILEUP_JOB=$(sbatch --parsable \
     --output "$OUTDIR/SLM/conpairPileup.%A_%a.out" \
     --export "ALL,SBATCH_SCRIPT_DIR=$SDIR" \
     "${PARTITION_ARGS[@]}" \
-    "$SDIR/conpairPileup.sh" "$OUTDIR" "$GENOME" "$FASTA" "$CONTAINER")
+    "$SDIR/conpairPileup.sh" "$OUTDIR" "$CONTAINER")
 
 ANALYZE_JOB=$(sbatch --parsable \
     --dependency "afterok:$PILEUP_JOB" \
     --output "$OUTDIR/SLM/conpairAnalyze.%j.out" \
     --export "ALL,SBATCH_SCRIPT_DIR=$SDIR" \
     "${PARTITION_ARGS[@]}" \
-    "$SDIR/conpairAnalyze.sh" "$OUTDIR" "$GENOME" "$CONTAINER")
+    "$SDIR/conpairAnalyze.sh" "$OUTDIR" "$CONTAINER")
 
+echo
+echo "runConpairCohort.sh $VERSION"
+echo "  samples    $N"
+for B in "${!BUILD_COUNT[@]}"; do
+    echo "  build      $B (${BUILD_COUNT[$B]} BAMs): ${FASTA_OF[$B]}"
+done
 cat <<EOF
-
-runConpairCohort.sh $VERSION
-  samples    $N
-  genome     $GENOME
-  reference  $FASTA
+  markers    $(basename "$MARKER_SETS")
   container  $CONTAINER
   output     $OUTDIR
   pileups    job $PILEUP_JOB (array 1-$N)
