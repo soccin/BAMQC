@@ -24,6 +24,13 @@ Shared pieces at the top level:
 
 No tool takes a genome argument. The build always comes from the BAM header.
 
+Every tool submits its jobs through slurmTools, a separate repository found
+in `$SLURMTOOLS_DIR`, else `../slurmTools` beside this one. Its README
+describes the launcher functions (`runGuard`, `runInit`, `runSubmit`,
+`runFinish`) and the rules for job scripts. A run is OK only when every task
+ended `COMPLETED` in `sacct` and the tool's output check passes, so each
+tool needs an output check that fails on missing, partial or stale outputs.
+
 ## conpair architecture
 
 The pipeline is split across host and container, and across SLURM jobs:
@@ -31,8 +38,9 @@ The pipeline is split across host and container, and across SLURM jobs:
 1. `runConpairCohort.sh` (login node, light only): validates the manifest,
    detects each BAM's build, picks FASTA and markers, writes the normalized
    `OUTDIR/manifest.tsv` (`sample, bam, individual, build, fasta`), then
-   submits two jobs. All later steps read that normalized manifest, never
-   the user's.
+   submits the jobs through slurmTools. All later steps read that
+   normalized manifest, never the user's. `runGuard` runs before anything
+   is written into `OUTDIR`, because the jobs of an active run read it.
 2. `conpairPileup.sh`: SLURM array, one task per manifest row
    (`SLURM_ARRAY_TASK_ID` = row). Runs Conpair's GATK pileup script in the
    container. That script ignores GATK's exit status, so success is checked
@@ -42,6 +50,10 @@ The pipeline is split across host and container, and across SLURM jobs:
 3. `conpairAnalyze.sh`: depends `afterok` on the array. Runs
    `conpairCohort.py` inside the container, then `conpairReport.R` on the
    host.
+4. The slurmTools status job (`afterany` on both) checks the job states,
+   then runs `conpairVerify.sh OUTDIR RUN_DIR/START`, and writes
+   `OUTDIR/RUNSTATUS.txt`. A change to the outputs (a new file, a changed
+   row count) must be reflected in `conpairVerify.sh`.
 
 `conpairMarkers.sh` is sourced (not executed) by all three shell scripts and
 is the single place mapping build to Conpair marker files. All BAMs in a run
@@ -78,6 +90,19 @@ conpair/bin/runConpairCohort.sh [-c FILE] [-p LIST] [-o OUTDIR] MANIFEST
 
 `OUTDIR` defaults to `./qc/conpair` and may not be under `/localscratch`
 or `/tmp`.
+
+Did the run finish, and did it succeed? Exit 0 OK, 1 FAILED, 2 RUNNING,
+3 UNKNOWN; `OUTDIR/RUNSTATUS.txt` holds the status job's verdict:
+
+```
+../slurmTools/bin/checkRun.sh OUTDIR
+```
+
+Check the outputs of a run directly (exit 0 when complete):
+
+```
+conpair/bin/conpairVerify.sh OUTDIR [SINCE]
+```
 
 Rerun only the report with other thresholds:
 
