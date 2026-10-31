@@ -6,14 +6,28 @@
 ## one job, dependent on it, for the concordance, contamination and report.
 ## Runs nothing heavy itself, so it is safe on a login node.
 ##
+## The jobs are submitted through slurmTools, which records the run in
+## OUTDIR/SLM/<RUN_ID> and adds a status job: once every job has ended it
+## checks their SLURM states and the outputs (conpairVerify.sh), writes
+## OUTDIR/RUNSTATUS.txt and mails the user.
+##
 
 set -euo pipefail
 
+COMMAND=("$0" "$@")
 SDIR=$(dirname "$(readlink -f "$0")")
 REPO=$(dirname "$(dirname "$SDIR")")
 VERSION=$(cat "$SDIR/../VERSION")
 # shellcheck source-path=SCRIPTDIR source=conpairMarkers.sh
 . "$SDIR/conpairMarkers.sh"
+
+SLURMTOOLS_DIR=${SLURMTOOLS_DIR:-$(dirname "$REPO")/slurmTools}
+if [ ! -f "$SLURMTOOLS_DIR/lib/slurmTools.sh" ]; then
+    echo -e "\n    ERROR: slurmTools not found in $SLURMTOOLS_DIR; set SLURMTOOLS_DIR\n" >&2
+    exit 1
+fi
+# shellcheck source-path=SCRIPTDIR source=../../../slurmTools/lib/slurmTools.sh
+. "$SLURMTOOLS_DIR/lib/slurmTools.sh"
 
 CONTAINER="${CONPAIR_SIF:-/home/soccin/Code/ConPair/conpair_v0.3.3.sif}"
 PARTITION=""
@@ -43,8 +57,9 @@ Options:
                         nodes cannot see. Default: ./qc/conpair
   -c, --container FILE  Conpair container. Default: \$CONPAIR_SIF, else
                         /home/soccin/Code/ConPair/conpair_v0.3.3.sif
-  -p, --partition LIST  SLURM partition(s) for both jobs. Default: the
-                        #SBATCH value in each job script.
+  -p, --partition LIST  SLURM partition(s) for all jobs. Default: the
+                        #SBATCH value in each job script, and
+                        cpushort,cmobic_short for the status job.
   -h, --help            Show this message and exit.
 
 The genome build of each BAM is read from its header
@@ -56,6 +71,13 @@ A pileup already in OUTDIR/pileup is reused when its BAM's fingerprint
 (size, and an md5 of the first and last 4 MB) is unchanged, so a rerun
 after adding samples only piles up the new ones, and moving a BAM does
 not force a new pileup.
+
+A last job checks the run once the others have ended: every job's SLURM
+state, then the outputs. Its verdict, OK or FAILED, goes to
+OUTDIR/RUNSTATUS.txt and SLURM mails \$USER@mskcc.org when it ends
+(\$SLURMTOOLS_MAIL overrides; empty for no mail). Check by hand with
+$SLURMTOOLS_DIR/bin/checkRun.sh OUTDIR
+A new run is refused while the last run in OUTDIR still has jobs queued.
 
 EOF
     exit 1
@@ -89,6 +111,8 @@ case "$OUTDIR/" in
     /localscratch/*|/tmp/*)
         die "output directory is node-local; the jobs on other nodes cannot see it: $OUTDIR" ;;
 esac
+## Before anything is written: the jobs of a running run read OUTDIR.
+runGuard "$OUTDIR"
 [ -f "$MANIFEST" ] || die "manifest not found: $MANIFEST"
 [ -f "$CONTAINER" ] || die "container not found: $CONTAINER"
 command -v samtools > /dev/null || die "samtools not on PATH (needed to read BAM headers)"
@@ -219,24 +243,36 @@ MARKER_SETS=$(for B in "${!BUILD_COUNT[@]}"; do echo "${MARKERS_OF[$B]}"; done |
 ## Copied with a redirect, not mv: mktemp files are mode 600, and the
 ## output directory is usually shared with a group.
 cat "$NEWMANIFEST" > "$OUTDIR/manifest.tsv"
-mkdir -p "$OUTDIR/pileup" "$OUTDIR/SLM"
+rm -f "$NEWMANIFEST"
+## runInit sets its own EXIT trap.
+trap - EXIT
+mkdir -p "$OUTDIR/pileup"
 
 PARTITION_ARGS=()
-[ -n "$PARTITION" ] && PARTITION_ARGS=(--partition "$PARTITION")
+if [ -n "$PARTITION" ]; then
+    PARTITION_ARGS=(--partition "$PARTITION")
+    export SLURMTOOLS_PARTITION=$PARTITION
+fi
 
-PILEUP_JOB=$(sbatch --parsable \
-    --array "1-$N" \
-    --output "$OUTDIR/SLM/conpairPileup.%A_%a.out" \
+##
+## From here on a failed submission cancels the jobs already submitted.
+## The logs go into the run directory, RUN_DIR.
+##
+runInit "$OUTDIR" conpair "$VERSION" "${COMMAND[@]}"
+
+runSubmit conpairPileup --array "1-$N" \
     --export "ALL,SBATCH_SCRIPT_DIR=$SDIR" \
     "${PARTITION_ARGS[@]}" \
-    "$SDIR/conpairPileup.sh" "$OUTDIR" "$CONTAINER")
+    -- "$SDIR/conpairPileup.sh" "$OUTDIR" "$CONTAINER"
+PILEUP_JOB=$RUN_JOBID
 
-ANALYZE_JOB=$(sbatch --parsable \
-    --dependency "afterok:$PILEUP_JOB" \
-    --output "$OUTDIR/SLM/conpairAnalyze.%j.out" \
+runSubmit conpairAnalyze --dependency "afterok:$PILEUP_JOB" \
     --export "ALL,SBATCH_SCRIPT_DIR=$SDIR" \
     "${PARTITION_ARGS[@]}" \
-    "$SDIR/conpairAnalyze.sh" "$OUTDIR" "$CONTAINER")
+    -- "$SDIR/conpairAnalyze.sh" "$OUTDIR" "$CONTAINER"
+ANALYZE_JOB=$RUN_JOBID
+
+runFinish "$SDIR/conpairVerify.sh" "$OUTDIR" "$RUN_DIR/START"
 
 echo
 echo "runConpairCohort.sh $VERSION"
@@ -250,6 +286,11 @@ cat <<EOF
   output     $OUTDIR
   pileups    job $PILEUP_JOB (array 1-$N)
   analysis   job $ANALYZE_JOB (after the pileups succeed)
-  logs       $OUTDIR/SLM/
+  status     job $RUN_STATUS_JOBID (after all jobs end: checks them and the outputs)
+  mail       ${RUN_MAIL:-none}
+  run        $RUN_DIR
+
+The verdict goes to $OUTDIR/RUNSTATUS.txt. Check any time with
+  $SLURMTOOLS_DIR/bin/checkRun.sh $OUTDIR
 
 EOF

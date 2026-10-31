@@ -8,10 +8,17 @@
 ## Concordance and contamination for every sample in OUTDIR/manifest.tsv
 ## (conpairCohort.py, in the container), then the report (conpairReport.R,
 ## host R). Submitted by runConpairCohort.sh after the pileups finish; can
-## also be resubmitted by hand.
+## also be resubmitted by hand, outside the run's record.
 ##
 
 set -euo pipefail
+
+## Exit status line at the end of the log, for slurmTools' checkRun.sh.
+## SLURMTOOLS_DIR is exported by runConpairCohort.sh.
+if [ -n "${SLURMTOOLS_DIR:-}" ]; then
+    # shellcheck source-path=SCRIPTDIR source=../../../slurmTools/lib/jobTrailer.sh
+    . "$SLURMTOOLS_DIR/lib/jobTrailer.sh"
+fi
 
 if [ -n "${SBATCH_SCRIPT_DIR:-}" ]; then
     SDIR="${SBATCH_SCRIPT_DIR}"
