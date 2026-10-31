@@ -29,12 +29,14 @@ Usage:
   runConpairCohort.sh --manifest FILE --out DIR [options]
 
 Required:
-  -m, --manifest FILE   TSV with a header. Columns:
+  -m, --manifest FILE   TSV or CSV with a header; a tab in the header
+                        means TSV, else CSV. Columns:
                           sample      sample ID, [A-Za-z0-9._-] only, unique
                           bam         path to an indexed BAM
                           individual  optional; expected identity, e.g.
                                       cmoPatientId. Without it samples are
                                       grouped by genotype but not flagged.
+                        Fields may be in double quotes.
   -o, --out DIR         Output directory, on shared storage.
 
 Options:
@@ -85,19 +87,73 @@ command -v samtools > /dev/null || die "samtools not on PATH (needed to read BAM
 CONTAINER=$(readlink -f "$CONTAINER")
 
 ##
+## Read the manifest, TSV or CSV: a tab in the header means TSV, else a
+## comma means CSV. Fields may be in double quotes ("" inside is a literal
+## quote); surrounding spaces, a UTF-8 BOM, CR line ends and rows with no
+## values are dropped. Prints one line per row: line number, parse error,
+## sample, bam, individual. They are separated by US (0x1f), not tab,
+## because bash read merges consecutive tabs and so loses empty fields.
+## On a header problem prints the message and exits 1.
+##
+US=$'\x1f'
+readManifest() {
+    LC_ALL=C awk -v US="$US" -v q="'" '
+        function trim(s) {
+            gsub(/^[ \t]+|[ \t]+$/, "", s)
+            return s
+        }
+        ## Split line on delim into f[1..n]. Returns n, or -1 when a
+        ## double quote is not closed.
+        function splitFields(line, f,    n, i, c, field, inQuote) {
+            delete f
+            n = 0; field = ""; inQuote = 0
+            for (i = 1; i <= length(line); i++) {
+                c = substr(line, i, 1)
+                if (inQuote) {
+                    if (c != "\"") field = field c
+                    else if (substr(line, i + 1, 1) == "\"") { field = field c; i++ }
+                    else inQuote = 0
+                } else if (c == "\"") inQuote = 1
+                else if (c == delim) { f[++n] = trim(field); field = "" }
+                else field = field c
+            }
+            f[++n] = trim(field)
+            return inQuote ? -1 : n
+        }
+        { sub(/\r$/, "") }
+        NR == 1 {
+            sub(/^\357\273\277/, "")
+            if (index($0, "\t")) delim = "\t"
+            else if (index($0, ",")) delim = ","
+            else { print "manifest header has no tab or comma; need TSV or CSV"; exit 1 }
+            n = splitFields($0, h)
+            if (n < 0) { print "unclosed double quote in the manifest header"; exit 1 }
+            for (i = n; i >= 1; i--) col[h[i]] = i
+            if (!("sample" in col)) { print "manifest has no " q "sample" q " column"; exit 1 }
+            if (!("bam" in col)) { print "manifest has no " q "bam" q " column"; exit 1 }
+            next
+        }
+        {
+            n = splitFields($0, f)
+            if (n < 0) { print NR US "unclosed double quote" US US US; next }
+            values = ""
+            for (i = 1; i <= n; i++) values = values f[i]
+            if (values == "") next
+            s = f[col["sample"]]; b = f[col["bam"]]
+            ind = ("individual" in col) ? f[col["individual"]] : ""
+            if (index(s b ind, "\t")) { print NR US "tab inside a field" US US US; next }
+            print NR US "" US s US b US ind
+        }
+        END { if (NR == 0) { print "manifest is empty"; exit 1 } }
+    ' "$1"
+}
+
+##
 ## Check the manifest and write a normalized copy into the output
 ## directory: absolute BAM paths, always the columns sample, bam,
 ## individual, build, fasta. Every job reads that copy, never the original.
 ##
-colIndex() {
-    head -1 "$MANIFEST" | tr -d '\r' \
-        | awk -F'\t' -v name="$1" '{for(i=1;i<=NF;i++) if($i==name){print i; exit}}'
-}
-SCOL=$(colIndex sample)
-BCOL=$(colIndex bam)
-ICOL=$(colIndex individual)
-[ -n "$SCOL" ] || die "manifest has no 'sample' column"
-[ -n "$BCOL" ] || die "manifest has no 'bam' column"
+ROWS=$(readManifest "$MANIFEST") || die "$ROWS"
 
 mkdir -p "$OUTDIR"
 OUTDIR=$(readlink -f "$OUTDIR")
@@ -107,17 +163,12 @@ trap 'rm -f "$NEWMANIFEST"' EXIT
 printf 'sample\tbam\tindividual\tbuild\tfasta\n' > "$NEWMANIFEST"
 declare -A SEEN FASTA_OF MARKERS_OF BUILD_COUNT
 ERRORS=0
-LINENO_=1
-while IFS= read -r LINE || [ -n "$LINE" ]; do
-    LINENO_=$((LINENO_ + 1))
-    LINE=${LINE%$'\r'}
-    [ -n "${LINE//[[:space:]]/}" ] || continue
-    IFS=$'\t' read -r -a F <<< "$LINE"
-    SAMPLE=${F[$((SCOL - 1))]:-}
-    BAM=${F[$((BCOL - 1))]:-}
-    INDIVIDUAL=""
-    [ -n "$ICOL" ] && INDIVIDUAL=${F[$((ICOL - 1))]:-}
-
+while IFS=$US read -r LINENO_ PARSE_ERROR SAMPLE BAM INDIVIDUAL; do
+    ## A manifest with no data rows gives one empty line.
+    [ -n "$LINENO_" ] || continue
+    if [ -n "$PARSE_ERROR" ]; then
+        echo "    line $LINENO_: $PARSE_ERROR" >&2; ERRORS=$((ERRORS + 1)); continue
+    fi
     if [[ ! "$SAMPLE" =~ ^[A-Za-z0-9._-]+$ ]]; then
         echo "    line $LINENO_: bad sample ID [$SAMPLE]" >&2; ERRORS=$((ERRORS + 1)); continue
     fi
@@ -148,7 +199,7 @@ while IFS= read -r LINE || [ -n "$LINE" ]; do
     fi
     BUILD_COUNT[$BUILD]=$(( ${BUILD_COUNT[$BUILD]:-0} + 1 ))
     printf '%s\t%s\t%s\t%s\t%s\n' "$SAMPLE" "$REALBAM" "$INDIVIDUAL" "$BUILD" "${FASTA_OF[$BUILD]}" >> "$NEWMANIFEST"
-done < <(tail -n +2 "$MANIFEST")
+done <<< "$ROWS"
 
 [ "$ERRORS" -eq 0 ] || die "$ERRORS manifest error(s), nothing submitted"
 N=$(( $(wc -l < "$NEWMANIFEST") - 1 ))
