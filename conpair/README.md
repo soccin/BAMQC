@@ -30,7 +30,11 @@ bin/runConpairCohort.sh --manifest FILE --out DIR [--container FILE]
 ```
 
 Run it on the login node; it only checks inputs and calls `sbatch`. The
-manifest is a TSV with a header:
+manifest is a TSV or CSV file with a header. A tab in the header line means
+TSV, otherwise a comma means CSV; the file name does not matter. Fields may
+be in double quotes (`""` inside them is a literal quote), as Excel writes
+them. Spaces around fields, a UTF-8 BOM, CRLF line ends and rows with no
+values are ignored. Columns, in any order:
 
 | Column | Required | Meaning |
 |---|---|---|
