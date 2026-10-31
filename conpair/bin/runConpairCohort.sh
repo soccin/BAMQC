@@ -17,8 +17,7 @@ VERSION=$(cat "$SDIR/../VERSION")
 
 CONTAINER="${CONPAIR_SIF:-/home/soccin/Code/ConPair/conpair_v0.3.3.sif}"
 PARTITION=""
-MANIFEST=""
-OUTDIR=""
+OUTDIR="./qc/conpair"
 
 usage() {
     cat <<EOF
@@ -26,10 +25,10 @@ usage() {
 runConpairCohort.sh $VERSION -- all-vs-all Conpair for a cohort of BAMs
 
 Usage:
-  runConpairCohort.sh --manifest FILE --out DIR [options]
+  runConpairCohort.sh [-c FILE] [-p LIST] [-o OUTDIR] MANIFEST
 
-Required:
-  -m, --manifest FILE   TSV or CSV with a header; a tab in the header
+Arguments:
+  MANIFEST              TSV or CSV with a header; a tab in the header
                         means TSV, else CSV. Columns:
                           sample      sample ID, [A-Za-z0-9._-] only, unique
                           bam         path to an indexed BAM
@@ -37,9 +36,11 @@ Required:
                                       cmoPatientId. Without it samples are
                                       grouped by genotype but not flagged.
                         Fields may be in double quotes.
-  -o, --out DIR         Output directory, on shared storage.
 
 Options:
+  -o, --out OUTDIR      Output directory, on shared storage: not under
+                        /localscratch or /tmp, which the jobs on other
+                        nodes cannot see. Default: ./qc/conpair
   -c, --container FILE  Conpair container. Default: \$CONPAIR_SIF, else
                         /home/soccin/Code/ConPair/conpair_v0.3.3.sif
   -p, --partition LIST  SLURM partition(s) for both jobs. Default: the
@@ -51,20 +52,21 @@ The genome build of each BAM is read from its header
 (bin/getGenomeFasta.sh) and the Conpair markers. BAMs on different builds
 can be mixed only when they share the markers (e.g. b37 and GRCh37-lite).
 
-Pileups already in DIR/pileup and newer than their BAM are reused, so a
-rerun after adding samples only piles up the new ones.
+A pileup already in OUTDIR/pileup is reused when its BAM's fingerprint
+(size, and an md5 of the first and last 4 MB) is unchanged, so a rerun
+after adding samples only piles up the new ones, and moving a BAM does
+not force a new pileup.
 
 EOF
     exit 1
 }
 
-ARGS=$(getopt -o 'm:o:c:p:h' \
-    --long 'manifest:,out:,container:,partition:,help' \
+ARGS=$(getopt -o 'o:c:p:h' \
+    --long 'out:,container:,partition:,help' \
     -n 'runConpairCohort.sh' -- "$@") || usage
 eval set -- "$ARGS"
 while true; do
     case "$1" in
-        -m|--manifest)  MANIFEST="$2"; shift 2 ;;
         -o|--out)       OUTDIR="$2"; shift 2 ;;
         -c|--container) CONTAINER="$2"; shift 2 ;;
         -p|--partition) PARTITION="$2"; shift 2 ;;
@@ -79,8 +81,14 @@ die() {
     exit 1
 }
 
-[ -n "$MANIFEST" ] || usage
+[ "$#" -eq 1 ] || usage
+MANIFEST=$1
 [ -n "$OUTDIR" ] || usage
+OUTDIR=$(readlink -m "$OUTDIR")
+case "$OUTDIR/" in
+    /localscratch/*|/tmp/*)
+        die "output directory is node-local; the jobs on other nodes cannot see it: $OUTDIR" ;;
+esac
 [ -f "$MANIFEST" ] || die "manifest not found: $MANIFEST"
 [ -f "$CONTAINER" ] || die "container not found: $CONTAINER"
 command -v samtools > /dev/null || die "samtools not on PATH (needed to read BAM headers)"
@@ -156,7 +164,6 @@ readManifest() {
 ROWS=$(readManifest "$MANIFEST") || die "$ROWS"
 
 mkdir -p "$OUTDIR"
-OUTDIR=$(readlink -f "$OUTDIR")
 NEWMANIFEST=$(mktemp "$OUTDIR/.manifest.XXXXXX")
 trap 'rm -f "$NEWMANIFEST"' EXIT
 
