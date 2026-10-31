@@ -13,6 +13,7 @@ repository: its NYGC license is single-user and academic only.
 
 ```
 bin/runConpairCohort.sh    entry point: checks the manifest, submits the jobs
+bin/conpairMarkers.sh      genome build -> Conpair marker files (sourced)
 bin/conpairPileup.sh       SLURM array task: GATK Pileup at the markers, one BAM
 bin/conpairAnalyze.sh      SLURM job: conpairCohort.py, then conpairReport.R
 bin/conpairCohort.py       concordance and contamination, in the container
@@ -24,8 +25,8 @@ VERSION
 ## Usage
 
 ```
-bin/runConpairCohort.sh --manifest FILE --out DIR [--genome GRCh37|GRCh38]
-                        [--fasta FILE] [--container FILE] [--partition LIST]
+bin/runConpairCohort.sh --manifest FILE --out DIR [--container FILE]
+                        [--partition LIST]
 ```
 
 Run it on the login node; it only checks inputs and calls `sbatch`. The
@@ -34,11 +35,25 @@ manifest is a TSV with a header:
 | Column | Required | Meaning |
 |---|---|---|
 | `sample` | yes | Sample ID, `[A-Za-z0-9._-]`, unique |
-| `bam` | yes | Indexed BAM aligned to `--fasta` |
+| `bam` | yes | Indexed BAM |
 | `individual` | no | Expected identity, e.g. cmoPatientId |
 
 Without `individual` the samples are still grouped by genotype, but nothing
 can be flagged as a mismatch.
+
+The genome is never given. Each BAM's build is read from its header with
+`../bin/getGenomeBuildBAM.sh`, and the build selects the reference FASTA
+(`../bin/getGenomeFasta.sh`) and the Conpair markers:
+
+| Builds | Markers |
+|---|---|
+| b37, b37_dmp, b37_dmp_v2, GRCh37-lite | GRCh37 (contigs `1`, `2`, ...) |
+| GRCh38, GRCh38_GDC/GRCh38.d1.vd1, hg38, hg38-igenomes | GRCh38 liftover (contigs `chr1`, `chr2`, ...) |
+
+A BAM whose build is unknown, has no FASTA on IRIS, or has no Conpair
+markers (hg19: `chr` names on GRCh37 coordinates) stops the run before
+anything is submitted. BAMs on different builds can be run together when
+they share the markers; each is piled up against its own FASTA.
 
 The container defaults to `$CONPAIR_SIF`, else
 `/home/soccin/Code/ConPair/conpair_v0.3.3.sif`. To pull it again:
@@ -164,7 +179,7 @@ Written into `DIR`:
 
 | File | Content |
 |---|---|
-| `manifest.tsv` | Normalized manifest used by all jobs |
+| `manifest.tsv` | Normalized manifest used by all jobs, with each BAM's detected `build` and reference `fasta` |
 | `pileup/<sample>.pileup` | GATK Pileup at the markers |
 | `conpair_samples.tsv` | Markers covered, % heterozygous, median coverage |
 | `conpair_concordance.tsv` | Every ordered pair: both concordance values and marker counts |
@@ -182,8 +197,8 @@ repository.
 
 ## Limits
 
-- Human only: GRCh37 or GRCh38 markers. The container also has GRCm38 mouse
-  exome markers, which this tool does not use.
+- Human only: the builds in the table under Usage. The container also has
+  GRCm38 mouse exome markers, which this tool does not use.
 - Markers are autosomal, so sex is not checked.
 - The container's Conpair predates the upstream fix for very high coverage
   (above about 1000x at a marker, likelihoods underflow). WGS and exome
