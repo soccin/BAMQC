@@ -296,6 +296,7 @@ report <- c(
     glue("Output: {path_real(outDir)}"),
     glue("Samples: {length(sampleOrder)}   Markers: {run[['nMarkers']]}   ",
          "Conpair driver: {run[['version']]}"),
+    glue("Genome build: {str_c(unique(manifest$build), collapse = ', ')}"),
     glue("Thresholds: match {matchPct}%, related {relatedPct}%, ",
          "contamination warn {contamWarn}% / fail {contamFail}%, ",
          "min markers {minMarkers}"),

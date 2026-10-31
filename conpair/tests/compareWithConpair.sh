@@ -14,7 +14,8 @@
 ## OUTDIR. They should be identical. Exits 1 if any differ.
 ##
 ## The paired contamination estimate is only compared when REFERENCE is
-## QUERY's partner in OUTDIR/conpair_contamination.tsv.
+## QUERY's partner in OUTDIR/conpair_contamination.tsv. The markers are
+## the ones the run used, from OUTDIR/conpair_run.tsv.
 ##
 ## Takes a few minutes (Conpair's contamination estimate). Submit it with
 ## sbatch; do not use srun from inside an interactive allocation, which
@@ -24,28 +25,23 @@
 set -euo pipefail
 
 if [ "$#" -lt 3 ]; then
-    echo -e "\n   usage: sbatch compareWithConpair.sh OUTDIR REFERENCE QUERY [GENOME] [CONTAINER]\n"
+    echo -e "\n   usage: sbatch compareWithConpair.sh OUTDIR REFERENCE QUERY [CONTAINER]\n"
     exit 1
 fi
 
 OUTDIR=$(readlink -f "$1")
 REF=$2
 QUERY=$3
-GENOME=${4:-GRCh37}
-CONTAINER=${5:-${CONPAIR_SIF:-/home/soccin/Code/ConPair/conpair_v0.3.3.sif}}
-
-MARKERS_DIR=/usr/bin/conpair/data/markers
-case "$GENOME" in
-    GRCh37) MARKERS_TXT=$MARKERS_DIR/GRCh37.autosomes.phase3_shapeit2_mvncall_integrated.20130502.SNV.genotype.sselect_v4_MAF_0.4_LD_0.8.txt ;;
-    GRCh38) MARKERS_TXT=$MARKERS_DIR/GRCh38.autosomes.phase3_shapeit2_mvncall_integrated.20130502.SNV.genotype.sselect_v4_MAF_0.4_LD_0.8.liftover.txt ;;
-    *) echo "ERROR: unknown genome [$GENOME]" >&2; exit 1 ;;
-esac
+CONTAINER=${4:-${CONPAIR_SIF:-/home/soccin/Code/ConPair/conpair_v0.3.3.sif}}
 
 REF_PILEUP=$OUTDIR/pileup/$REF.pileup
 QUERY_PILEUP=$OUTDIR/pileup/$QUERY.pileup
-for F in "$REF_PILEUP" "$QUERY_PILEUP" "$OUTDIR/conpair_concordance.tsv" "$OUTDIR/conpair_contamination.tsv"; do
+for F in "$REF_PILEUP" "$QUERY_PILEUP" "$OUTDIR/conpair_concordance.tsv" \
+         "$OUTDIR/conpair_contamination.tsv" "$OUTDIR/conpair_run.tsv"; do
     [ -f "$F" ] || { echo "ERROR: not found: $F" >&2; exit 1; }
 done
+MARKERS_TXT=$(awk -F'\t' '$1=="markers"{print $2}' "$OUTDIR/conpair_run.tsv")
+[ -n "$MARKERS_TXT" ] || { echo "ERROR: no markers in $OUTDIR/conpair_run.tsv" >&2; exit 1; }
 
 ##
 ## Conpair's scripts write into the working directory and call Rscript for
