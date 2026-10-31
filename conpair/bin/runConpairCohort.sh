@@ -20,7 +20,7 @@ VERSION=$(cat "$SDIR/../VERSION")
 # shellcheck source-path=SCRIPTDIR source=conpairMarkers.sh
 . "$SDIR/conpairMarkers.sh"
 
-SLURMTOOLS_DIR=${SLURMTOOLS_DIR:-$(dirname "$REPO")/slurmTools}
+SLURMTOOLS_DIR=${SLURMTOOLS_DIR:-$REPO/slurmTools}
 if [ ! -f "$SLURMTOOLS_DIR/slurmTools.sh" ]; then
     echo -e "\n    ERROR: slurmTools not found in $SLURMTOOLS_DIR; set SLURMTOOLS_DIR\n" >&2
     exit 1
@@ -246,7 +246,7 @@ if [ -n "$PARTITION" ]; then
 fi
 
 ## Starts the run (RUN_DIR) and records every sbatch below.
-# shellcheck source-path=SCRIPTDIR source=../../../slurmTools/slurmTools.sh
+# shellcheck source-path=SCRIPTDIR source=../../slurmTools/slurmTools.sh
 . "$SLURMTOOLS_DIR/slurmTools.sh" "$OUTDIR"
 
 PILEUP_JOB=$(sbatch --parsable \

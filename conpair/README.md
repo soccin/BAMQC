@@ -36,9 +36,8 @@ other nodes cannot see it.
 
 ### Knowing that a run is done and correct
 
-The jobs are submitted through
-[slurmTools](../../slurmTools/README.md): `$SLURMTOOLS_DIR`, by default the
-`slurmTools` directory beside the BAMQC repository. Each run is recorded in
+The jobs are recorded by [slurmTools](../slurmTools/README.md), the copy
+in `BAMQC/slurmTools/` (`$SLURMTOOLS_DIR` overrides). Each run is recorded in
 `OUTDIR/SLM/<RUN_ID>/`, with its logs. A last status job starts once every
 job has ended, whatever their state. It checks each job's SLURM state, then,
 if all completed, the outputs (`bin/conpairVerify.sh`):

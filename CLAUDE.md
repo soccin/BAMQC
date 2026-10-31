@@ -24,9 +24,11 @@ Shared pieces at the top level:
 
 No tool takes a genome argument. The build always comes from the BAM header.
 
-Every launcher uses slurmTools, a separate repository found in
-`$SLURMTOOLS_DIR`, else `../slurmTools` beside this one. Sourcing its
-`slurmTools.sh OUTDIR` records every later `sbatch` call (a bash function
+Every launcher uses slurmTools. `slurmTools/` is a copy of the separate
+slurmTools repository (github.com/soccin/slurmTools); never edit it here.
+Change slurmTools itself, then copy all its files but `.git` over
+`slurmTools/`. Do not turn it into a git submodule. Launchers find it as
+`${SLURMTOOLS_DIR:-$REPO/slurmTools}`. Sourcing `slurmTools.sh OUTDIR` records every later `sbatch` call (a bash function
 wraps it), and `slurmFinish VERIFY...` adds the status job; see its
 README. Call `sbatch` in the launcher's own shell, not from a separate
 script, or the job is not recorded. A run is OK only when every task
@@ -93,10 +95,11 @@ conpair/bin/runConpairCohort.sh [-c FILE] [-p LIST] [-o OUTDIR] MANIFEST
 or `/tmp`.
 
 Did the run finish, and did it succeed? Exit 0 OK, 1 FAILED, 2 RUNNING,
-3 UNKNOWN; `OUTDIR/RUNSTATUS.txt` holds the status job's verdict:
+3 no run found or sacct failed; `OUTDIR/RUNSTATUS.txt` holds the status
+job's verdict:
 
 ```
-../slurmTools/bin/checkRun.sh OUTDIR
+slurmTools/bin/checkRun.sh OUTDIR
 ```
 
 Check the outputs of a run directly (exit 0 when complete):
