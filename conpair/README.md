@@ -25,12 +25,15 @@ VERSION
 ## Usage
 
 ```
-bin/runConpairCohort.sh --manifest FILE --out DIR [--container FILE]
-                        [--partition LIST]
+bin/runConpairCohort.sh [-c FILE] [-p LIST] [-o OUTDIR] MANIFEST
 ```
 
-Run it on the login node; it only checks inputs and calls `sbatch`. The
-manifest is a TSV or CSV file with a header. A tab in the header line means
+Run it on the login node; it only checks inputs and calls `sbatch`.
+`OUTDIR` defaults to `./qc/conpair`. It must be on shared storage: an
+`OUTDIR` under `/localscratch` or `/tmp` is rejected, because the jobs on
+other nodes cannot see it.
+
+`MANIFEST` is a TSV or CSV file with a header. A tab in the header line means
 TSV, otherwise a comma means CSV; the file name does not matter. Fields may
 be in double quotes (`""` inside them is a literal quote), as Excel writes
 them. Spaces around fields, a UTF-8 BOM, CRLF line ends and rows with no
@@ -66,12 +69,16 @@ The container defaults to `$CONPAIR_SIF`, else
 singularity pull conpair_v0.3.3.sif docker://cmopipeline/conpair:v0.3.3
 ```
 
-Pileups already in `DIR/pileup` and newer than their BAM are reused, so a
-rerun after adding samples only piles up the new ones. The report alone can
-be rerun with other thresholds:
+A pileup already in `OUTDIR/pileup` is reused when its BAM's fingerprint is
+unchanged, so a rerun after adding samples only piles up the new ones. The
+fingerprint is the BAM's size and the md5 of its first and last 4 MB. It
+reads 8 MB rather than the whole BAM, and does not include the path, so a
+moved BAM keeps its pileup, while a different BAM under the same sample
+name is piled up again. The report alone can be rerun with other
+thresholds:
 
 ```
-Rscript bin/conpairReport.R DIR [--related 80] [--contam-warn 2] [--contam-fail 5]
+Rscript bin/conpairReport.R OUTDIR [--related 80] [--contam-warn 2] [--contam-fail 5]
 ```
 
 ## Steps
@@ -179,12 +186,13 @@ these apart.
 
 ## Outputs
 
-Written into `DIR`:
+Written into `OUTDIR`:
 
 | File | Content |
 |---|---|
 | `manifest.tsv` | Normalized manifest used by all jobs, with each BAM's detected `build` and reference `fasta` |
 | `pileup/<sample>.pileup` | GATK Pileup at the markers |
+| `pileup/<sample>.fingerprint` | Fingerprint of the BAM the pileup came from: size and md5 |
 | `conpair_samples.tsv` | Markers covered, % heterozygous, median coverage |
 | `conpair_concordance.tsv` | Every ordered pair: both concordance values and marker counts |
 | `conpair_contamination.tsv` | Single and paired estimate, partner |
@@ -196,7 +204,7 @@ Written into `DIR`:
 | `SLM/` | SLURM logs |
 | `tmp/` | Java temporary space for the pileups; empty after a successful run |
 
-All of these carry sample names. They stay in `DIR`, outside the
+All of these carry sample names. They stay in `OUTDIR`, outside the
 repository.
 
 ## Limits
@@ -237,5 +245,5 @@ To check a pair from any run (it compares the paired estimate only when
 REFERENCE is QUERY's partner):
 
 ```
-sbatch -o compare.%j.out tests/compareWithConpair.sh DIR REFERENCE QUERY
+sbatch -o compare.%j.out tests/compareWithConpair.sh OUTDIR REFERENCE QUERY
 ```

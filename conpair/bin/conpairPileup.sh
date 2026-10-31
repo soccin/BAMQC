@@ -42,19 +42,40 @@ MARKERS=$(conpairMarkers "$BUILD") \
     || { echo "ERROR: Conpair has no markers for build [$BUILD]" >&2; exit 1; }
 MARKERS_BED=$MARKERS.bed
 
-PILEUP=$OUTDIR/pileup/$SAMPLE.pileup
-echo "Start: conpairPileup $SAMPLE $(date)"
-echo "  bam     $BAM"
-echo "  build   $BUILD"
-echo "  fasta   $FASTA"
-echo "  output  $PILEUP"
-echo "  bin     $SDIR"
+##
+## Fingerprint of a BAM: its size and the md5 of its first and last 4 MB.
+## The first 4 MB hold the header (read groups, @PG command lines), the
+## last the final alignments and the EOF block. Reads 8 MB rather than
+## the whole BAM, and does not depend on the path, so a moved BAM keeps
+## its pileup. Not a content hash: it only tells one BAM from another.
+##
+bamFingerprint() {
+    local size md5
+    size=$(stat -L -c %s "$1")
+    md5=$( { head -c 4M "$1"; tail -c 4M "$1"; } | md5sum | cut -d' ' -f1)
+    echo "$size $md5"
+}
 
-if [ -s "$PILEUP" ] && [ "$PILEUP" -nt "$BAM" ]; then
-    echo "Pileup exists and is newer than the BAM; reusing it."
+PILEUP=$OUTDIR/pileup/$SAMPLE.pileup
+FINGERPRINT_FILE=$OUTDIR/pileup/$SAMPLE.fingerprint
+FINGERPRINT=$(bamFingerprint "$BAM")
+echo "Start: conpairPileup $SAMPLE $(date)"
+echo "  bam          $BAM"
+echo "  fingerprint  $FINGERPRINT"
+echo "  build        $BUILD"
+echo "  fasta        $FASTA"
+echo "  output       $PILEUP"
+echo "  bin          $SDIR"
+
+if [ -s "$PILEUP" ] && [ -f "$FINGERPRINT_FILE" ] \
+        && [ "$(cat "$FINGERPRINT_FILE")" == "$FINGERPRINT" ]; then
+    echo "Pileup exists and the BAM fingerprint is unchanged; reusing it."
     echo "End: conpairPileup $SAMPLE $(date)"
     exit 0
 fi
+## Removed before the pileup is replaced, so a task that dies part way
+## leaves no fingerprint, and the next run piles up again.
+rm -f "$FINGERPRINT_FILE"
 
 TMPOUT=$OUTDIR/pileup/.$SAMPLE.pileup.$SLURM_JOB_ID
 JAVATMP=$OUTDIR/tmp/$SAMPLE.$SLURM_JOB_ID
@@ -87,6 +108,7 @@ if [ ! -s "$TMPOUT" ] || ! tail -1 "$TMPOUT" | grep -q '^\[REDUCE RESULT\]'; the
     exit 1
 fi
 mv "$TMPOUT" "$PILEUP"
+echo "$FINGERPRINT" > "$FINGERPRINT_FILE"
 
 echo "Sites: $(grep -vc '^\[REDUCE RESULT\]' "$PILEUP")"
 echo "End: conpairPileup $SAMPLE $(date)"

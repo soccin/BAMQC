@@ -7,7 +7,7 @@ rather than one sample or one pair at a time.
 
 | Tool | Question it answers | Status |
 |---|---|---|
-| [`conpair/`](conpair/README.md) | Which samples come from the same individual, and how contaminated is each sample? | 0.2.1 |
+| [`conpair/`](conpair/README.md) | Which samples come from the same individual, and how contaminated is each sample? | 0.3.0 |
 
 ## Layout
 
