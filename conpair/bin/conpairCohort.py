@@ -20,15 +20,16 @@ How this differs from running Conpair one pair at a time:
     sample in the cohort (its partner) as the known genotype.
 
 Writes into --out:
-  conpair_samples.tsv        marker coverage and genotype summary per sample
-  conpair_concordance.tsv    every ordered pair (reference, query)
-  conpair_contamination.tsv  single and paired estimate per sample
-  conpair_run.tsv            version, parameters and timing
+  conpair_samples.csv        marker coverage and genotype summary per sample
+  conpair_concordance.csv    every ordered pair (reference, query)
+  conpair_contamination.csv  single and paired estimate per sample
+  conpair_run.csv            version, parameters and timing
 """
 
 from __future__ import division, print_function
 
 import argparse
+import csv
 import multiprocessing
 import os
 import sys
@@ -273,9 +274,12 @@ def fmt(value):
     return "NA" if value is None else str(value)
 
 
-def write_tsv(path, header, rows):
+def write_csv(path, header, rows):
     # type: (str, List[str], List[tuple]) -> None
-    """Write rows to a tab-separated file with a header line.
+    """Write rows to a comma-separated file with a header line.
+
+    Fields are quoted only when they contain a comma, a quote or a line
+    break.
 
     Args:
         path: Output file.
@@ -283,9 +287,10 @@ def write_tsv(path, header, rows):
         rows: Row tuples, None written as NA.
     """
     with open(path, "w") as fp:
-        fp.write("\t".join(header) + "\n")
+        writer = csv.writer(fp, lineterminator="\n")
+        writer.writerow(header)
         for row in rows:
-            fp.write("\t".join(fmt(v) for v in row) + "\n")
+            writer.writerow([fmt(v) for v in row])
 
 
 def parse_args(argv):
@@ -372,7 +377,7 @@ def main(argv):
         sample_rows.append((s, int((calls[i] != NOCALL).sum()), n_usable,
                             percent(n_het, n_usable),
                             float(np.median(coverage[i]))))
-    write_tsv(os.path.join(args.out, "conpair_samples.tsv"),
+    write_csv(os.path.join(args.out, "conpair_samples.csv"),
               ["sample", "markersWithReads", "markersCovered", "pctHet",
                "medianCoverage"],
               sample_rows)
@@ -381,7 +386,7 @@ def main(argv):
     ## Concordance, every ordered pair.
     ##
     conc_rows = concordance_rows(samples, calls, coverage, args.min_cov)
-    write_tsv(os.path.join(args.out, "conpair_concordance.tsv"),
+    write_csv(os.path.join(args.out, "conpair_concordance.csv"),
               ["reference", "query", "concordanceHom", "nMarkersHom",
                "concordanceAll", "nMarkersAll"],
               conc_rows)
@@ -423,7 +428,7 @@ def main(argv):
         partner, partner_conc = partners.get(s, (None, None))
         contam_rows.append((s, single.get(s), partner, partner_conc,
                             paired.get(s)))
-    write_tsv(os.path.join(args.out, "conpair_contamination.tsv"),
+    write_csv(os.path.join(args.out, "conpair_contamination.csv"),
               ["sample", "contaminationSingle", "partner",
                "partnerConcordance", "contaminationPaired"],
               contam_rows)
@@ -444,7 +449,7 @@ def main(argv):
         ("started", time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(started))),
         ("seconds", int(finished - started)),
     ]
-    write_tsv(os.path.join(args.out, "conpair_run.tsv"), ["key", "value"], run_rows)
+    write_csv(os.path.join(args.out, "conpair_run.csv"), ["key", "value"], run_rows)
     log("done in {0:.0f} s".format(finished - started))
     return 0
 
