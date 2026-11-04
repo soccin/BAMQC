@@ -77,9 +77,10 @@ output() {
     return 0
 }
 
-## Sorted values of the column named COL in a TSV; fails without it.
+## Sorted values of the column named COL in a CSV; fails without it.
+## FPAT keeps a quoted field with commas in it as one field.
 columnValues() {
-    awk -F'\t' -v c="$2" '
+    awk -v FPAT='([^,]*)|("[^"]*")' -v c="$2" '
         NR == 1 {
             for (i = 1; i <= NF; i++) if ($i == c) k = i
             if (!k) exit 1
@@ -112,7 +113,7 @@ pairTable() {
     else
         expect=$((N * (N - 1) / 2))
     fi
-    got=$(awk -F'\t' -v a="$a" -v b="$b" -v ordered="$ordered" '
+    got=$(awk -v FPAT='([^,]*)|("[^"]*")' -v a="$a" -v b="$b" -v ordered="$ordered" '
         FNR == NR { s[$1] = 1; next }
         FNR == 1 {
             for (i = 1; i <= NF; i++) { if ($i == a) ka = i; if ($i == b) kb = i }
@@ -133,22 +134,28 @@ pairTable() {
     fi
 }
 
-perSample conpair_samples.tsv sample
-pairTable conpair_concordance.tsv reference query 1
-perSample conpair_contamination.tsv sample
-perSample conpair_summary.tsv sample
-pairTable conpair_pairs.tsv sampleA sampleB 0
+perSample conpair_samples.csv sample
+pairTable conpair_concordance.csv reference query 1
+perSample conpair_contamination.csv sample
+perSample conpair_summary.csv sample
+pairTable conpair_pairs.csv sampleA sampleB 0
 
-if output conpair_run.tsv; then
-    RUN_VERSION=$(awk -F'\t' '$1 == "version" { print $2 }' "$OUTDIR/conpair_run.tsv")
-    RUN_N=$(awk -F'\t' '$1 == "nSamples" { print $2 }' "$OUTDIR/conpair_run.tsv")
+if output conpair_run.csv; then
+    RUN_VERSION=$(awk -F, '$1 == "version" { print $2 }' "$OUTDIR/conpair_run.csv")
+    RUN_N=$(awk -F, '$1 == "nSamples" { print $2 }' "$OUTDIR/conpair_run.csv")
     [ "$RUN_VERSION" == "$VERSION" ] \
-        || problem "conpair_run.tsv: version [$RUN_VERSION], this conpair is $VERSION"
+        || problem "conpair_run.csv: version [$RUN_VERSION], this conpair is $VERSION"
     [ "$RUN_N" == "$N" ] \
-        || problem "conpair_run.tsv: nSamples [$RUN_N], the manifest has $N"
+        || problem "conpair_run.csv: nSamples [$RUN_N], the manifest has $N"
 fi
 
 output conpair_report.txt || true
+## An .xlsx is a zip archive; an incomplete one has no end-of-archive record.
+if output conpair_tables.xlsx; then
+    XLSX=$OUTDIR/conpair_tables.xlsx
+    [ "$(head -c 2 "$XLSX")" == "PK" ] || problem "not an xlsx (zip) file: $XLSX"
+    grep -aq $'PK\x05\x06' < <(tail -c 1024 "$XLSX") || problem "xlsx incomplete, no zip end record: $XLSX"
+fi
 if output conpair_report.pdf; then
     PDF=$OUTDIR/conpair_report.pdf
     [ "$(head -c 5 "$PDF")" == "%PDF-" ] || problem "not a PDF: $PDF"

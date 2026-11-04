@@ -14,8 +14,8 @@
 ## OUTDIR. They should be identical. Exits 1 if any differ.
 ##
 ## The paired contamination estimate is only compared when REFERENCE is
-## QUERY's partner in OUTDIR/conpair_contamination.tsv. The markers are
-## the ones the run used, from OUTDIR/conpair_run.tsv.
+## QUERY's partner in OUTDIR/conpair_contamination.csv. The markers are
+## the ones the run used, from OUTDIR/conpair_run.csv.
 ##
 ## Takes a few minutes (Conpair's contamination estimate). Submit it with
 ## sbatch; do not use srun from inside an interactive allocation, which
@@ -36,12 +36,12 @@ CONTAINER=${4:-${CONPAIR_SIF:-/home/soccin/Code/ConPair/conpair_v0.3.3.sif}}
 
 REF_PILEUP=$OUTDIR/pileup/$REF.pileup
 QUERY_PILEUP=$OUTDIR/pileup/$QUERY.pileup
-for F in "$REF_PILEUP" "$QUERY_PILEUP" "$OUTDIR/conpair_concordance.tsv" \
-         "$OUTDIR/conpair_contamination.tsv" "$OUTDIR/conpair_run.tsv"; do
+for F in "$REF_PILEUP" "$QUERY_PILEUP" "$OUTDIR/conpair_concordance.csv" \
+         "$OUTDIR/conpair_contamination.csv" "$OUTDIR/conpair_run.csv"; do
     [ -f "$F" ] || { echo "ERROR: not found: $F" >&2; exit 1; }
 done
-MARKERS_TXT=$(awk -F'\t' '$1=="markers"{print $2}' "$OUTDIR/conpair_run.tsv")
-[ -n "$MARKERS_TXT" ] || { echo "ERROR: no markers in $OUTDIR/conpair_run.tsv" >&2; exit 1; }
+MARKERS_TXT=$(awk -F, '$1=="markers"{print $2}' "$OUTDIR/conpair_run.csv")
+[ -n "$MARKERS_TXT" ] || { echo "ERROR: no markers in $OUTDIR/conpair_run.csv" >&2; exit 1; }
 
 ##
 ## Conpair's scripts write into the working directory and call Rscript for
@@ -83,12 +83,12 @@ CONPAIR_ALL=$(awk -F'\t' 'NR==2{print $2}' "$WORK/all_concordance.txt")
 CONPAIR_SINGLE=$(awk -F'\t' '$1=="N"{print $3}' "$WORK/contam_contamination.txt")
 CONPAIR_PAIRED=$(awk -F'\t' '$1=="T"{print $3}' "$WORK/contam_contamination.txt")
 
-OURS_HOM=$(awk -F'\t' -v r="$REF" -v q="$QUERY" '$1==r && $2==q {print $3}' "$OUTDIR/conpair_concordance.tsv")
-OURS_ALL=$(awk -F'\t' -v r="$REF" -v q="$QUERY" '$1==r && $2==q {print $5}' "$OUTDIR/conpair_concordance.tsv")
-OURS_SINGLE=$(awk -F'\t' -v r="$REF" '$1==r {print $2}' "$OUTDIR/conpair_contamination.tsv")
-OURS_PARTNER=$(awk -F'\t' -v q="$QUERY" '$1==q {print $3}' "$OUTDIR/conpair_contamination.tsv")
+OURS_HOM=$(awk -F, -v r="$REF" -v q="$QUERY" '$1==r && $2==q {print $3}' "$OUTDIR/conpair_concordance.csv")
+OURS_ALL=$(awk -F, -v r="$REF" -v q="$QUERY" '$1==r && $2==q {print $5}' "$OUTDIR/conpair_concordance.csv")
+OURS_SINGLE=$(awk -F, -v r="$REF" '$1==r {print $2}' "$OUTDIR/conpair_contamination.csv")
+OURS_PARTNER=$(awk -F, -v q="$QUERY" '$1==q {print $3}' "$OUTDIR/conpair_contamination.csv")
 if [ "$OURS_PARTNER" == "$REF" ]; then
-    OURS_PAIRED=$(awk -F'\t' -v q="$QUERY" '$1==q {print $5}' "$OUTDIR/conpair_contamination.tsv")
+    OURS_PAIRED=$(awk -F, -v q="$QUERY" '$1==q {print $5}' "$OUTDIR/conpair_contamination.csv")
 else
     OURS_PAIRED="skip"
 fi
