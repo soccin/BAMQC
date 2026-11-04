@@ -19,8 +19,8 @@ Shared pieces at the top level:
 - `bin/getGenomeFasta.sh` maps a build to a FASTA on IRIS and verifies the
   FASTA's `.dict` hashes back to the same build.
 - `R/palettes.R` holds every color used in figures. Do not hard-code colors
-  in a tool; use `PAL_QC`, `PAL_CAT`/`PAL_CAT32` via `catColors()`, and
-  `NA_GREY`.
+  in a tool; use `PAL_QC`, `PAL_CAT`/`PAL_CAT32` via `catColors()`,
+  `PAL_PASSFAIL`, and `NA_GREY`.
 
 No tool takes a genome argument. The build always comes from the BAM header.
 
@@ -80,7 +80,7 @@ Constraints that are easy to break:
 - `conpairReport.R` exits 0 whenever it can read its inputs; it reports,
   it does not gate.
 - Thresholds are shared: `conpairReport.R` takes the match and
-  min-markers defaults from `conpair_run.tsv` so groups and partners agree
+  min-markers defaults from `conpair_run.csv` so groups and partners agree
   with what `conpairCohort.py` computed.
 
 ## Commands
@@ -96,7 +96,7 @@ or `/tmp`.
 
 Did the run finish, and did it succeed? Exit 0 OK, 1 FAILED, 2 RUNNING,
 3 no run found or sacct failed; `OUTDIR/RUNSTATUS.txt` holds the status
-job's verdict:
+job's run status:
 
 ```
 slurmTools/bin/checkRun.sh OUTDIR

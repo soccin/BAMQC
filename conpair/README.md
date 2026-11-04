@@ -46,17 +46,18 @@ if all completed, the outputs (`bin/conpairVerify.sh`):
   `[REDUCE RESULT]` line) and its fingerprint;
 - every table has one row per sample, or per pair, for exactly the
   manifest's samples: N rows in the per-sample tables, N(N-1) in
-  `conpair_concordance.tsv`, N(N-1)/2 in `conpair_pairs.tsv`;
-- `conpair_run.tsv` has this version and N samples;
-- the text report is not empty and the PDF is complete;
+  `conpair_concordance.csv`, N(N-1)/2 in `conpair_pairs.csv`;
+- `conpair_run.csv` has this version and N samples;
+- the text report is not empty, and the PDF and the workbook are
+  complete;
 - every table and report was written by this run, not left by an earlier
   one. Pileups are exempt, since unchanged ones are reused.
 
-The verdict, `OK` or `FAILED` with the reason, goes to
+The run status, `OK` or `FAILED` with the reason, goes to
 `OUTDIR/RUNSTATUS.txt`, and SLURM mails `$USER@mskcc.org` when the status
 job ends (`SLURMTOOLS_MAIL` sets another address; empty for no mail). The
-mail only says the run is done; read the verdict in `RUNSTATUS.txt`. To check
-a run at any time (`runConpairCohort.sh` prints the full path):
+mail only says the run is done; read the run status in `RUNSTATUS.txt`.
+To check a run at any time (`runConpairCohort.sh` prints the full path):
 
 ```
 $SLURMTOOLS_DIR/bin/checkRun.sh OUTDIR
@@ -175,7 +176,7 @@ Conpair estimates contamination in two ways, and both are reported:
 
 A sample's partner is the other sample with the highest `concordanceHom`
 from partner to sample, provided it is at least the match threshold. The
-verdict uses `contaminationPaired` when a partner exists and
+QC uses `contaminationPaired` when a partner exists and
 `contaminationSingle` otherwise; the `contaminationMethod` column says
 which.
 
@@ -184,7 +185,7 @@ Conpair's function against an empty pileup, which skips the paired part.
 
 The source of contamination is not identified. That is planned for v2.
 
-## Flags and verdicts
+## Flags and QC
 
 Pair status (needs `individual` on both samples):
 
@@ -196,7 +197,7 @@ Pair status (needs `individual` on both samples):
 | `LOW_MARKERS` | fewer than 100 markers, no identity value | none |
 | `OK` | none of the above | none |
 
-Sample verdict is the worst of:
+A sample's QC (column `qc`) is the worst of:
 
 - its pair flags;
 - contamination: at least 2% is WARN, at least 5% is FAIL (Tempo's
@@ -227,20 +228,67 @@ Written into `OUTDIR`:
 | `manifest.tsv` | Normalized manifest used by all jobs, with each BAM's detected `build` and reference `fasta` |
 | `pileup/<sample>.pileup` | GATK Pileup at the markers |
 | `pileup/<sample>.fingerprint` | Fingerprint of the BAM the pileup came from: size and md5 |
-| `conpair_samples.tsv` | Markers covered, % heterozygous, median coverage |
-| `conpair_concordance.tsv` | Every ordered pair: both concordance values and marker counts |
-| `conpair_contamination.tsv` | Single and paired estimate, partner |
-| `conpair_run.tsv` | Version, parameters, run time |
-| `conpair_summary.tsv` | One row per sample: verdict, group, contamination, flags |
-| `conpair_pairs.tsv` | One row per pair: identity, both directions, status |
+| `conpair_samples.csv` | Markers covered, % heterozygous, median coverage |
+| `conpair_concordance.csv` | Every ordered pair: both concordance values and marker counts |
+| `conpair_contamination.csv` | Single and paired estimate, partner |
+| `conpair_run.csv` | Version, parameters, run time |
+| `conpair_summary.csv` | One row per sample: QC, group, contamination, flags |
+| `conpair_pairs.csv` | One row per pair: identity, both directions, status |
+| `conpair_tables.xlsx` | Every `conpair_*.csv` above as a sheet: summary, pairs, contamination, samples, concordance, run |
 | `conpair_report.txt` | Text report |
-| `conpair_report.pdf` | Concordance heatmaps (homozygous-marker and all-marker) and contamination plot |
-| `RUNSTATUS.txt` | Verdict on the newest run: `OK`, `FAILED`, `RUNNING`, ... and why |
+| `conpair_report.pdf` | Overview, flagged samples, concordance matrix, one small matrix per individual, contamination per sample, glossary; see below |
+| `RUNSTATUS.txt` | Run status of the newest run: `OK`, `FAILED`, `RUNNING`, ... and why |
 | `SLM/<RUN_ID>/` | One run: its record (`RUNINFO`, `jobs.tsv`), SLURM logs, `RUNSTATUS.txt` and the report behind it, `checkRun.txt` |
 | `tmp/` | Java temporary space for the pileups; empty after a successful run |
 
+The tables are comma-separated; a field is quoted only when it holds a
+comma (for example `groupMembers`). Missing values are `NA` in the
+tables `conpairCohort.py` writes and empty in `conpair_summary.csv` and
+`conpair_pairs.csv`. `manifest.tsv` stays tab-separated: it is the jobs'
+input, not a result. A table longer than an Excel sheet allows (the
+concordance table, from about 1,024 samples) is left out of the workbook,
+and a `note` sheet says so.
+
 All of these carry sample names. They stay in `OUTDIR`, outside the
 repository.
+
+### The PDF
+
+Every page is US letter landscape, whatever the number of samples.
+
+1. **Overview.** Counts, QC levels and thresholds; a histogram of the
+   identity of every pair, one row for pairs of the same individual
+   (blue) and one for different individuals (green), with the areas where
+   a pair is flagged shaded and the flagged pairs labeled; the
+   contamination of every sample, one row per estimate type, with samples
+   at or above the warning threshold named.
+2. **Flagged samples.** A table of every sample whose QC is not
+   `PASS`, worst first, one line per flag, continued on more pages when
+   needed. Left out when every sample passes.
+3. **Concordance matrix.** Every directed `concordanceHom`, samples in
+   genotype-group order, with a QC bar on each side. Flagged pairs
+   are outlined. Up to 30 samples it shows names and values; above that
+   only the samples whose QC is not `PASS` are named. The name of a
+   sample that is not `PASS` ends in `(c)` for contamination at or above
+   the warning threshold, `(m)` for an identity flag, or `(c, m)`.
+4. **One small matrix per individual**, 12 to a page, flagged ones first.
+   A tile holds the samples connected by the same individual label or by
+   an identity at or above the related threshold, so a mislabeled sample
+   appears next to both its labeled individual and its genotype match.
+   Each cell gives `concordanceHom` and, in parentheses,
+   `concordanceAll`; the row below gives each sample's contamination.
+   Tiles with more than 6 samples get a page of their own. Samples with
+   no other sample of their individual get no tile.
+5. **Contamination per sample**, highest first, 100 to a page on a
+   pseudo-log axis. The value used for QC is black: a filled circle
+   for a paired estimate, an open circle for a single estimate (the
+   sample has no paired one). When a sample has both, its single estimate
+   is also drawn, as a grey x joined to the paired one, for comparison
+   only.
+6. **Glossary.** The terms and marks used in the report, with this run's
+   thresholds, in three columns: QC levels, flags, genotype and identity,
+   contamination, and the marks on the pages, each mark next to a small
+   copy of it.
 
 ## Limits
 
