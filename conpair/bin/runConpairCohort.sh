@@ -70,7 +70,7 @@ after adding samples only piles up the new ones, and moving a BAM does
 not force a new pileup.
 
 A last job checks the run once the others have ended: every job's SLURM
-state, then the outputs. Its verdict, OK or FAILED, goes to
+state, then the outputs. Its run status, OK or FAILED, goes to
 OUTDIR/RUNSTATUS.txt and SLURM mails \$USER@mskcc.org when it ends
 (\$SLURMTOOLS_MAIL overrides; empty for no mail). Check by hand with
 $SLURMTOOLS_DIR/bin/checkRun.sh OUTDIR
@@ -281,7 +281,7 @@ cat <<EOF
   mail       ${RUN_MAIL:-none}
   run        $RUN_DIR
 
-The verdict goes to $OUTDIR/RUNSTATUS.txt. Check any time with
+The run status goes to $OUTDIR/RUNSTATUS.txt. Check any time with
   $SLURMTOOLS_DIR/bin/checkRun.sh $OUTDIR
 
 EOF

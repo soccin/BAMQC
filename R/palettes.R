@@ -28,6 +28,12 @@ PAL_CAT32 <- c("#0000FF", "#FF0000", "#00FF00", "#000033", "#FF00B6",
 ## "None" / unassigned
 NA_GREY <- "grey70"
 
+## QC levels. WARN and FAIL are status warning and critical colors; PASS is
+## a quiet grey so problems stand out; INCOMPLETE (no estimate) is a dark
+## grey. Always shown with the level's word, never by color alone.
+PAL_PASSFAIL <- c(PASS = "#A6A6A6", INCOMPLETE = "#5E5E5E",
+                  WARN = "#FAB219", FAIL = "#D03B3B")
+
 ##
 ## Named categorical colors for a vector of labels. Levels are ordered by
 ## descending count, ties by first appearance, so the largest groups get
