@@ -271,14 +271,24 @@ Every page is US letter landscape, whatever the number of samples.
    only the samples whose QC is not `PASS` are named. The name of a
    sample that is not `PASS` ends in `(c)` for contamination at or above
    the warning threshold, `(m)` for an identity flag, or `(c, m)`.
-4. **One small matrix per individual**, 12 to a page, flagged ones first.
-   A tile holds the samples connected by the same individual label or by
-   an identity at or above the related threshold, so a mislabeled sample
-   appears next to both its labeled individual and its genotype match.
-   Each cell gives `concordanceHom` and, in parentheses,
-   `concordanceAll`; the row below gives each sample's contamination.
-   Tiles with more than 6 samples get a page of their own. Samples with
-   no other sample of their individual get no tile.
+4. **One small matrix (tile) per individual.** A tile holds the samples
+   connected by the same individual label or by an identity at or above
+   the related threshold, so a mislabeled sample appears next to both its
+   labeled individual and its genotype match. Each cell gives
+   `concordanceHom` and, in parentheses, `concordanceAll`; the row below
+   gives each sample's contamination. Flagged tiles (worst QC not `PASS`)
+   come first, on their own pages, with larger cells: their flagged pairs
+   are outlined, their flags are named under the title, and a last row
+   gives each sample's genotype group. In a tile of more than one
+   individual, the samples are grouped by individual, with lines between
+   the groups and each individual's name above and beside its samples;
+   sample names drop the part they share with their individual's name or
+   other samples. Column names are never turned on their side: they wrap
+   at `_`, `.` and `-`. All cells of flagged tiles are one size, and all
+   cells of PASS tiles another, so a tile takes the room its samples and
+   names need; the tiles flow across the page in rows, and a tile too
+   large for a page gets smaller cells. Samples with no other sample of
+   their individual get no tile.
 5. **Contamination per sample**, highest first, 100 to a page on a
    pseudo-log axis. The value used for QC is black: a filled circle
    for a paired estimate, an open circle for a single estimate (the
