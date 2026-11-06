@@ -381,7 +381,7 @@ cat(report, sep = "\n")
 ##   1. overview: identity of every pair, contamination of every sample;
 ##   2. the flagged samples as a table, left out when none is flagged;
 ##   3. the full concordance matrix;
-##   4. one small matrix per individual, TILE_COLUMNS x TILE_ROWS a page;
+##   4. one small matrix per individual, flagged ones first and larger;
 ##   5. contamination per sample, two columns of CONTAM_ROWS a page;
 ##   6. a glossary of the terms used.
 ## The full matrix carries sample names and values only up to
@@ -390,9 +390,6 @@ cat(report, sep = "\n")
 PAGE_WIDTH <- 11
 PAGE_HEIGHT <- 8.5
 LABEL_MAX_N <- 30
-TILE_COLUMNS <- 4
-TILE_ROWS <- 3
-TILE_MAX_N <- 6
 CONTAM_ROWS <- 50
 
 ##
@@ -939,6 +936,12 @@ matrixTitle <- str_c(
 ## shows up in one tile next to both its labeled individual and its
 ## genotype match. Samples that connect to nothing get no tile.
 ##
+## Flagged tiles (worst QC not PASS) come first, on their own pages, with
+## larger cells, outlined flagged pairs and a row of genotype groups. PASS
+## tiles follow. In a tile of more than one individual, the samples are
+## grouped by individual, with the individual's name above and beside them
+## and lines between them.
+##
 families <- igraph::graph_from_data_frame(
     pairs |>
         filter(replace_na(sameIndividual, FALSE) | replace_na(identity >= relatedPct, FALSE)) |>
@@ -975,30 +978,200 @@ sharedPrefix <- function(x) {
     str_extract(common, "^.*[_.-]") |> replace_na("")
 }
 
-## sideIn is the tile's approximate side in inches; text scales with it.
-makeTile <- function(members, worst, individuals, groups, sideIn) {
-    n <- length(members)
-    prefix <- sharedPrefix(members)
-    short <- str_sub(members, str_length(prefix) + 1)
-    title <- if (prefix != "") {
+##
+## Tiles are built when the PDF device is open, so their labels can be
+## measured. Every cell of a flagged tile is TILE_CELL_IN["flagged"] inches
+## square, every cell of a PASS tile TILE_CELL_IN["PASS"], so each tile takes
+## the room its samples and names need. The tiles flow across the page body
+## (the area under the page subtitle) in rows; a tile larger than the body
+## gets smaller cells.
+##
+TILE_BODY_IN <- c(10.4, 6.5)
+TILE_GAP_IN <- 0.15
+TILE_CELL_IN <- c(flagged = 0.6, PASS = 0.5)
+TILE_MARGIN_PT <- 6
+TILE_FONT <- 7
+NO_LABEL <- "no label"
+TILE_FLAGS <- c("EXPECTED_MATCH_FAIL", "UNEXPECTED_MATCH", "PARTIAL_MATCH", "CONTAMINATION",
+                "LOW_MARKERS", "no contamination estimate")
+tileTitleGp <- grid::gpar(fontsize = 8, fontface = "bold")
+tileSubtitleGp <- grid::gpar(fontsize = 6.5)
+tileAxisGp <- grid::gpar(fontsize = TILE_FONT)
+tileNameGp <- grid::gpar(fontsize = TILE_FONT, fontface = "bold")
+
+## The pieces of a name, each ending in its separator:
+## "LS0767_01L8_P0" -> "LS0767_", "01L8_", "P0". A piece wider than widthIn
+## in the font gp is cut into pieces that are not.
+nameTokens <- function(x, widthIn = Inf, gp = tileAxisGp) {
+    str_extract_all(x, "[^_.-]*[_.-]|[^_.-]+$")[[1]] |>
+        map(\(piece) {
+            if (is.infinite(widthIn) || textWidthIn(piece, gp) <= widthIn) {
+                return(piece)
+            }
+            chars <- str_split_1(piece, "")
+            line <- fillBins(textWidthIn(chars, gp), widthIn)
+            map_chr(seq_len(max(line)), \(k) str_c(chars[line == k], collapse = ""))
+        }) |>
+        list_c()
+}
+
+## Pieces joined into lines at most widthIn wide in the font gp, sep
+## between pieces on a line. A line breaks only between pieces; a piece
+## wider than widthIn gets a line of its own.
+wrapPieces <- function(pieces, widthIn, gp, sep = "") {
+    sepIn <- if (sep == "") 0 else textWidthIn(sep, gp)
+    line <- fillBins(textWidthIn(pieces, gp), widthIn, c(0, rep(sepIn, length(pieces) - 1)))
+    map_chr(seq_len(max(line)), \(k) str_c(pieces[line == k], collapse = sep))
+}
+
+## A sample's name without its individual's name, when it starts with it:
+## "CL_DD5816_P17" of CL_DD5816 -> "P17". Otherwise the whole name.
+withoutIndividual <- function(sample, individual) {
+    rest <- str_sub(sample, str_length(individual) + 1)
+    starts <- !is.na(individual) & str_sub(sample, 1, str_length(individual)) == individual &
+        str_detect(rest, "^[_.-].")
+    if_else(replace_na(starts, FALSE), str_sub(rest, 2), sample)
+}
+
+## Sample labels in a tile. With one individual, the part all the names
+## share is dropped; it is the tile title. With more, each name drops the
+## longer of its individual's name and the part it shares with its
+## individual's other samples; the individual's name heads its rows and
+## columns. "s_C_AB12_T001_d" and "s_C_AB12_N001_d" of C-AB12 become
+## "T001_d" and "N001_d".
+tileLabels <- function(sample, individual, multi) {
+    labels <- if (multi) {
+        tibble(sample, individual) |>
+            group_by(individual) |>
+            mutate(
+                shared = if (n() > 1) {
+                    str_sub(sample, str_length(sharedPrefix(sample)) + 1)
+                } else {
+                    sample
+                },
+                own = withoutIndividual(sample, individual),
+                label = if_else(str_length(own) < str_length(shared), own, shared)
+            ) |>
+            pull(label)
+    } else {
+        str_sub(sample, str_length(sharedPrefix(sample)) + 1)
+    }
+    if_else(labels == "", sample, labels)
+}
+
+## The flags in a tile, in TILE_FLAGS order. A flagged pair always lies
+## inside one tile: its samples share a label or reach the related
+## threshold.
+tileFlags <- function(members) {
+    s <- summary |> filter(sample %in% members)
+    found <- c(
+        flaggedPairs |> filter(sampleA %in% members, sampleB %in% members) |> pull(status),
+        if (any(contaminationLevelOf(s$contamination) %in% c("WARN", "FAIL"))) "CONTAMINATION",
+        if (any(s$markersCovered < minMarkers, na.rm = TRUE)) "LOW_MARKERS",
+        if (any(is.na(s$contamination))) "no contamination estimate"
+    )
+    TILE_FLAGS[TILE_FLAGS %in% found]
+}
+
+## The individuals' names in a tile of more than one: above their columns,
+## in a row added over the column labels, wrapped at separators when wider
+## than the columns; and left of their rows' labels. Those labels are short,
+## so a name can share the row-label column with the longer "contam. %";
+## a column is added on the left for the part that does not fit.
+addIndividualNames <- function(g, blocks, n, yMin, cellIn, rowLabels, yLabels) {
+    lineIn <- TILE_FONT * 1.2 / 72
+    padIn <- 0.03
+    above <- map2(blocks$name, blocks$last - blocks$first + 1, \(name, k) {
+        wrapPieces(nameTokens(name, k * cellIn - 0.02, tileNameGp), k * cellIn - 0.02, tileNameGp)
+    })
+    axisTop <- g$layout$t[g$layout$name == "axis-t"]
+    g <- gtable::gtable_add_rows(g, grid::unit(max(lengths(above)) * lineIn + padIn, "in"),
+                                 pos = axisTop - 1)
+    panel <- g$layout[g$layout$name == "panel", ]
+    g <- gtable::gtable_add_grob(
+        g,
+        pmap(list(above, blocks$first, blocks$last), \(lines, a, b) {
+            grid::textGrob(str_c(lines, collapse = "\n"), x = ((a + b) / 2 - 0.5) / n,
+                           y = grid::unit(padIn, "in"), vjust = 0, gp = tileNameGp)
+        }),
+        t = axisTop, l = panel$l, r = panel$r, clip = "off",
+        name = str_c("individual-above-", seq_len(nrow(blocks)))
+    )
+    ## besideIn: from the panel's left edge to the right end of a name.
+    axisLeft <- g$layout$l[g$layout$name == "axis-l"]
+    axisIn <- grid::convertWidth(g$widths[axisLeft], "in", valueOnly = TRUE)
+    besideIn <- axisIn - max(textWidthIn(yLabels, tileAxisGp)) +
+        max(textWidthIn(rowLabels, tileAxisGp)) + 3 * padIn
+    extraIn <- max(0, besideIn + max(textWidthIn(blocks$name, tileNameGp)) + padIn - axisIn)
+    g <- gtable::gtable_add_cols(g, grid::unit(extraIn, "in"), pos = axisLeft - 1)
+    panel <- g$layout[g$layout$name == "panel", ]
+    gtable::gtable_add_grob(
+        g,
+        pmap(list(blocks$name, blocks$first, blocks$last), \(name, a, b) {
+            grid::textGrob(name, x = grid::unit(1, "npc") - grid::unit(besideIn, "in"),
+                           y = (-(a + b) / 2 - yMin) / (-0.5 - yMin), hjust = 1, gp = tileNameGp)
+        }),
+        t = panel$t, l = axisLeft, r = axisLeft + 1, clip = "off",
+        name = str_c("individual-beside-", seq_len(nrow(blocks)))
+    )
+}
+
+## One tile as a gtable of fixed size, with cells cellIn inches square and
+## its title and flags wrapped to textIn inches. Returns the gtable and the
+## tile's size in cells, across and down.
+tileGrob <- function(members, worst, individuals, groups, cellIn, textIn = Inf) {
+    flagged <- worst != "PASS"
+    info <- summary |>
+        filter(sample %in% members) |>
+        select(sample, individual, genotypeGroup, contamination, contaminationMethod) |>
+        arrange(is.na(individual), individual, sample)
+    n <- nrow(info)
+    multi <- n_distinct(info$individual) > 1
+    info <- info |>
+        mutate(pos = row_number(), label = tileLabels(sample, individual, multi))
+    pos <- info |> select(sample, pos) |> deframe()
+    blocks <- info |>
+        mutate(name = replace_na(individual, NO_LABEL)) |>
+        group_by(name) |>
+        summarize(first = min(pos), last = max(pos)) |>
+        arrange(first)
+
+    prefix <- sharedPrefix(info$sample)
+    titlePieces <- if (multi) {
+        str_c(blocks$name, c(rep(",", nrow(blocks) - 1), ""))
+    } else if (prefix != "") {
         str_remove(prefix, "[_.-]$")
     } else if (individuals != "") {
         individuals
     } else {
         groups
     }
-    subtitle <- str_c(c(groups, worst, if (individuals != "" && individuals != title) individuals),
-                      collapse = "   ")
-    contamY <- -(n + 1.15)
-    textMain <- min(3, 0.25 * sideIn * 25.4 / (n + 1.15))
-    textSmall <- 0.85 * textMain
+    title <- str_c(wrapPieces(titlePieces, textIn, tileTitleGp, sep = " "), collapse = "\n")
+    flags <- if (flagged) tileFlags(members) else character()
+    subtitle <- str_c(c(
+        str_c(c(groups, worst,
+                if (!multi && individuals != "" && individuals != titlePieces) individuals),
+              collapse = "   "),
+        if (length(flags) > 0) {
+            wrapPieces(str_c(flags, c(rep(",", length(flags) - 1), "")), textIn, tileSubtitleGp,
+                       sep = " ")
+        }
+    ), collapse = "\n")
 
-    cells <- expand_grid(reference = members, query = members) |>
+    ## Text in the cells scales with them. Under the matrix: the
+    ## contamination row, then, in a flagged tile, the genotype groups.
+    mainSize <- min(9, 0.24 * 72 * cellIn) / .pt
+    smallSize <- 0.8 * mainSize
+    contamY <- -(n + 1)
+    groupY <- -(n + 1.6)
+    yMin <- if (flagged) -(n + 1.85) else -(n + 1.35)
+
+    cells <- expand_grid(reference = info$sample, query = info$sample) |>
         left_join(directed |> select(reference, query, concHom, concAll),
                   by = c("reference", "query")) |>
         mutate(
-            x = match(query, members),
-            y = -match(reference, members),
+            x = unname(pos[query]),
+            y = -unname(pos[reference]),
             onDiag = reference == query,
             fill = if_else(onDiag, "white", concordanceFill(concHom)),
             ink = concordanceInk(concHom),
@@ -1006,100 +1179,205 @@ makeTile <- function(members, worst, individuals, groups, sideIn) {
             allLabel = if_else(is.na(concAll), "", sprintf("(%.1f)", concAll))
         )
     values <- cells |> filter(!onDiag)
-    contamCells <- tibble(sample = members, x = seq_len(n)) |>
-        left_join(summary |> select(sample, contamination, contaminationMethod), by = "sample") |>
+    tilePairs <- flaggedPairs |> filter(sampleA %in% members, sampleB %in% members)
+    outlined <- tibble(reference = c(tilePairs$sampleA, tilePairs$sampleB),
+                       query = c(tilePairs$sampleB, tilePairs$sampleA)) |>
+        mutate(x = unname(pos[query]), y = -unname(pos[reference]))
+    between <- head(blocks$last, -1) + 0.5
+    blockLines <- tibble(
+        x = c(between, rep(0.5, length(between))),
+        xend = c(between, rep(n + 0.5, length(between))),
+        y = c(rep(-0.5, length(between)), -between),
+        yend = c(rep(-(n + 0.5), length(between)), -between)
+    )
+    contamCells <- info |>
         mutate(
             level = contaminationLevelOf(contamination),
-            label = if_else(is.na(contamination), "none",
-                            str_c(formatContam(contamination), " ",
-                                  str_sub(contaminationMethod, 1, 1))),
+            text = if_else(is.na(contamination), "none",
+                           str_c(formatContam(contamination), " ",
+                                 str_sub(contaminationMethod, 1, 1))),
             fill = if_else(level == "PASS", "white", unname(PAL_PASSFAIL[level])),
             ink = if_else(level %in% c("FAIL", "INCOMPLETE"), "white", "black")
         )
-    rotate <- max(str_length(short)) > 5
-    frame <- if (worst == "PASS") {
-        element_blank()
+
+    ## Column labels wrap to the cell width, at separators where they can.
+    colLabels <- map_chr(info$label, \(s) {
+        str_c(wrapPieces(nameTokens(s, cellIn - 0.04), cellIn - 0.04, tileAxisGp), collapse = "\n")
+    })
+    frame <- if (flagged) {
+        element_rect(color = PAL_PASSFAIL[[worst]], fill = NA, linewidth = 1)
     } else {
-        element_rect(color = PAL_PASSFAIL[[worst]], fill = NA, linewidth = 1.2)
+        element_blank()
     }
 
-    ggplot() +
+    p <- ggplot() +
         geom_tile(data = cells, aes(x, y, fill = fill), color = "white", linewidth = 0.5) +
         geom_text(data = values, aes(x, y + 0.14, label = homLabel, color = ink),
-                  size = textMain) +
+                  size = mainSize) +
         geom_text(data = values, aes(x, y - 0.22, label = allLabel, color = ink),
-                  size = textSmall) +
-        geom_tile(data = contamCells, aes(x, contamY, fill = fill),
+                  size = smallSize) +
+        ## The outline of a flagged pair is black in a white ring, so it shows
+        ## on dark cells as well as light ones.
+        geom_tile(data = outlined, aes(x, y), width = 0.86, height = 0.86, fill = NA,
+                  color = "white", linewidth = 1.3) +
+        geom_tile(data = outlined, aes(x, y), width = 0.86, height = 0.86, fill = NA,
+                  color = "black", linewidth = 0.6) +
+        geom_segment(data = blockLines, aes(x, y, xend = xend, yend = yend),
+                     color = "grey50", linewidth = 0.4) +
+        geom_tile(data = contamCells, aes(pos, contamY, fill = fill), height = 0.7,
                   color = "grey85", linewidth = 0.3) +
-        geom_text(data = contamCells, aes(x, contamY, label = label, color = ink),
-                  size = textSmall) +
+        geom_text(data = contamCells, aes(pos, contamY, label = text, color = ink),
+                  size = smallSize) +
+        (if (flagged) {
+            geom_text(data = info, aes(pos, groupY, label = genotypeGroup),
+                      color = "grey30", size = smallSize)
+        }) +
         scale_fill_identity() +
         scale_color_identity() +
-        scale_x_continuous(breaks = seq_len(n), labels = short, position = "top",
-                           expand = c(0, 0)) +
-        scale_y_continuous(breaks = c(-seq_len(n), contamY), labels = c(short, "contam. %"),
-                           expand = c(0, 0)) +
-        coord_fixed(clip = "off") +
-        labs(title = str_trunc(title, if (sideIn < 3) 30 else 80), subtitle = subtitle,
-             x = NULL, y = NULL) +
-        theme_minimal(base_size = 7) +
+        scale_x_continuous(breaks = seq_len(n), labels = colLabels, position = "top") +
+        scale_y_continuous(breaks = c(-seq_len(n), contamY, if (flagged) groupY),
+                           labels = c(info$label, "contam. %", if (flagged) "group")) +
+        coord_cartesian(xlim = c(0.5, n + 0.5), ylim = c(yMin, -0.5), expand = FALSE,
+                        clip = "off") +
+        labs(title = title, subtitle = subtitle, x = NULL, y = NULL) +
+        theme_minimal(base_size = TILE_FONT) +
         theme(
             panel.grid = element_blank(),
-            axis.text = element_text(size = 6.5),
-            axis.text.x.top = element_text(angle = if (rotate) 90 else 0,
-                                           hjust = if (rotate) 0 else 0.5, vjust = 0.5),
+            panel.widths = grid::unit(n * cellIn, "in"),
+            panel.heights = grid::unit((-0.5 - yMin) * cellIn, "in"),
+            axis.text = element_text(size = TILE_FONT),
+            axis.text.x.top = element_text(vjust = 0, margin = margin(b = 2)),
+            plot.title.position = "plot",
             plot.title = element_text(size = 8, face = "bold"),
-            plot.subtitle = element_text(size = 6.5, color = "grey30"),
+            plot.subtitle = element_text(size = 6.5, color = "grey30", margin = margin(b = 4)),
             plot.background = frame,
-            plot.margin = margin(6, 6, 6, 6)
+            plot.margin = margin(TILE_MARGIN_PT, TILE_MARGIN_PT, TILE_MARGIN_PT, TILE_MARGIN_PT)
         )
+    g <- ggplotGrob(p)
+    if (multi) {
+        g <- addIndividualNames(g, blocks, n, yMin, cellIn, info$label,
+                                c(info$label, "contam. %", if (flagged) "group"))
+    }
+    list(grob = g, cells = c(n, -0.5 - yMin))
+}
+
+## A tile with cells cellIn inches square, or smaller when the tile would
+## not fit the page body, and its title wrapped to its width. Smaller cells
+## can wrap the labels onto more lines, so it is refitted a few times.
+## Returns the gtable and its width and height in inches.
+fitTile <- function(members, worst, individuals, groups, cellIn) {
+    textIn <- Inf
+    for (k in 1:4) {
+        tile <- tileGrob(members, worst, individuals, groups, cellIn, textIn)
+        sizeIn <- c(grid::convertWidth(sum(tile$grob$widths), "in", valueOnly = TRUE),
+                    grid::convertHeight(sum(tile$grob$heights), "in", valueOnly = TRUE))
+        fitCell <- min(cellIn, (TILE_BODY_IN - (sizeIn - tile$cells * cellIn)) / tile$cells)
+        fitTextIn <- sizeIn[1] - 2 * TILE_MARGIN_PT / 72
+        if (fitCell >= cellIn && fitTextIn >= textIn - 0.01) {
+            break
+        }
+        cellIn <- fitCell
+        textIn <- fitTextIn
+    }
+    list(grob = tile$grob, width = sizeIn[1], height = sizeIn[2])
 }
 
 tileArgs <- function(df) select(df, members, worst, individuals, groups)
-gridFamilies <- families |> filter(n <= TILE_MAX_N)
-soloFamilies <- families |> filter(n > TILE_MAX_N)
-tilesPerPage <- TILE_COLUMNS * TILE_ROWS
 
-gridPlots <- if (nrow(gridFamilies) > 0) {
-    gridFamilies |>
-        mutate(page = (row_number() - 1) %/% tilesPerPage + 1) %>%
+## Pages of tiles. The tiles flow left to right in rows, and the rows down
+## the page: a tile that does not fit the rest of a row starts the next, a
+## row that does not fit the rest of the page starts the next page. A null
+## row under each tile keeps it at the top of its row.
+tileSection <- function(fams, cellIn) {
+    tiles <- pmap(tileArgs(fams), fitTile, cellIn = cellIn)
+    if (length(tiles) == 0) {
+        return(list())
+    }
+    gap <- grid::unit(TILE_GAP_IN, "in")
+    placed <- tibble(tile = tiles, width = map_dbl(tiles, "width"),
+                     height = map_dbl(tiles, "height")) |>
+        mutate(row = fillBins(width, TILE_BODY_IN[1], TILE_GAP_IN)) |>
+        group_by(row) |>
+        mutate(rowHeight = max(height)) |>
+        ungroup()
+    pageOfRow <- placed |>
+        distinct(row, rowHeight) |>
+        mutate(page = fillBins(rowHeight, TILE_BODY_IN[2], TILE_GAP_IN)) |>
+        select(row, page)
+    rowGrob <- function(r) {
+        grobs <- map(r$tile, \(t) gtable::gtable_add_rows(t$grob, grid::unit(1, "null")))
+        gtable::gtable_row("tile-row", grobs, height = grid::unit(r$rowHeight[1], "in"),
+                           widths = grid::unit(r$width, "in")) |>
+            gtable::gtable_add_col_space(gap) |>
+            gtable::gtable_add_cols(grid::unit(1, "null"))
+    }
+    placed |>
+        left_join(pageOfRow, by = "row") %>%
         split(.$page) |>
-        map(\(chunk) {
-            pmap(tileArgs(chunk), makeTile, sideIn = 1.9) |>
-                wrap_plots(ncol = TILE_COLUMNS, nrow = TILE_ROWS)
-        })
-} else {
-    list()
+        map(\(onPage) {
+            pageRows <- onPage %>% split(.$row)
+            body <- gtable::gtable_col(
+                "tile-rows", map(pageRows, rowGrob), width = grid::unit(1, "null"),
+                heights = grid::unit(map_dbl(pageRows, \(r) r$rowHeight[1]), "in")
+            ) |>
+                gtable::gtable_add_row_space(gap) |>
+                gtable::gtable_add_rows(grid::unit(1, "null"))
+            wrap_elements(full = body)
+        }) |>
+        unname()
 }
-soloPlots <- pmap(tileArgs(soloFamilies), makeTile, sideIn = 6.2) |>
-    map(wrap_plots)
-tilePlots <- unname(c(gridPlots, soloPlots))
 
-tileSubtitle <- str_c(
-    if (hasIndividual) {
-        glue("Each tile holds the samples of one individual, with any sample at or above ",
-             "{relatedPct}% identity to them.")
-    } else {
-        glue("Each tile holds samples connected by identity at or above {relatedPct}%.")
-    },
-    "\n",
-    "Cell: concordance (%) at markers homozygous in the row (reference) sample; ",
-    "below it, in parentheses, at all covered markers.\n",
-    "Bottom row: contamination (%) used for QC; p = paired estimate, s = single. ",
-    "Sample names omit the part they share, which is the tile title.\n",
-    "Under the title: genotype group(s) and the worst QC in the tile. ",
-    "A frame in a QC color marks a tile whose worst QC is not PASS."
+tileIntro <- if (hasIndividual) {
+    glue("Each tile holds the samples of one individual, with any sample at or above ",
+         "{relatedPct}% identity to them.")
+} else {
+    glue("Each tile holds samples connected by identity at or above {relatedPct}%.")
+}
+tileSubtitles <- list(
+    flagged = str_c(
+        tileIntro, "\n",
+        "Cell: concordance (%) at markers homozygous in the row (reference) sample; ",
+        "below it, in parentheses, at all covered markers. Outlined cells: flagged pairs.\n",
+        "Under the matrix: contamination (%) used for QC, p = paired estimate, s = single; ",
+        "then each sample's genotype group.\n",
+        "Sample names omit the part they share, which is the tile title. With more than one ",
+        "individual, samples are grouped by individual, with lines between them;\n",
+        "each name omits the part it shares with its individual's name or other samples, and ",
+        "the individual's name heads its rows and columns.\n",
+        "Under the title: genotype group(s), the worst QC in the tile and its flags. ",
+        "The frame's color is the worst QC."
+    ),
+    PASS = str_c(
+        tileIntro, "\n",
+        "Cell: concordance (%) at markers homozygous in the row (reference) sample; ",
+        "below it, in parentheses, at all covered markers.\n",
+        "Bottom row: contamination (%) used for QC; p = paired estimate, s = single. ",
+        "Sample names omit the part they share, which is the tile title.\n",
+        "Under the title: genotype group(s) and QC."
+    )
 )
 tileCaption <- glue("{nSamples - sum(families$n)} samples have no tile: no other sample ",
                     "shares their individual or reaches {relatedPct}% identity with them.")
-tilePages <- imap(tilePlots, \(p, k) {
-    p + plot_annotation(
-        title = glue("Samples of the same individual, page {k} of {length(tilePlots)}"),
-        subtitle = tileSubtitle,
-        caption = tileCaption,
-        theme = pageTitleTheme
+
+## Flagged tiles first, then PASS tiles; each part numbers its own pages.
+tilePages <- function() {
+    sections <- list(
+        flagged = tileSection(families |> filter(worst != "PASS"), TILE_CELL_IN[["flagged"]]),
+        PASS = tileSection(families |> filter(worst == "PASS"), TILE_CELL_IN[["PASS"]])
     )
-})
+    imap(sections, \(pages, kind) {
+        imap(pages, \(p, k) {
+            p + plot_annotation(
+                title = glue("Samples of the same individual, {kind}, page {k} of {length(pages)}"),
+                subtitle = tileSubtitles[[kind]],
+                caption = tileCaption,
+                theme = pageTitleTheme
+            )
+        })
+    }) |>
+        list_flatten() |>
+        unname()
+}
 
 ##
 ## Page 5: contamination per sample, highest first, two columns of
@@ -1364,14 +1642,20 @@ glossaryEntries <- tribble(
     "Marks on the pages", "Dashed line", "A threshold.", "threshold",
     "Marks on the pages", "Triangle", "A flagged pair, at its identity, on page 1.", "flaggedPair",
     "Marks on the pages", "QC bar", "The strip along the matrix: each sample's QC.", "qcBar",
-    "Marks on the pages", "Outlined cell", "A flagged pair, in the matrix.", "outlined",
+    "Marks on the pages", "Outlined cell", "A flagged pair, in the matrix and the tiles.", "outlined",
     "Marks on the pages", "Grey cell", glue("No value: fewer than {minMarkers} markers."), "noValue",
     "Marks on the pages", "Tile",
     glue("A small matrix of one individual's samples, plus any sample at {relatedPct}% identity ",
-         "or more to them. A frame in a QC color: the tile's worst QC is not PASS."),
+         "or more to them. Flagged tiles come first, larger, framed in the color of their worst QC."),
+    NA,
+    "Marks on the pages", "Line in a tile",
+    str_c("Separates the samples of different individuals. Each individual's name is above and ",
+          "beside its samples."),
     NA,
     "Marks on the pages", "contam. %",
-    "A tile's bottom row: the contamination used for QC; p paired, s single estimate.", NA,
+    "The row under a tile's matrix: the contamination used for QC; p paired, s single estimate.", NA,
+    "Marks on the pages", "group", "In a flagged tile, the row under contam. %: each sample's genotype group.",
+    NA,
     "Marks on the pages", "Filled circle", "A paired estimate, used for QC.", "paired",
     "Marks on the pages", "Open circle",
     "A single estimate, used for QC: the sample has no partner.", "single",
@@ -1502,7 +1786,7 @@ tableRows %>%
     iwalk(\(rows, k) print(flagTablePage(rows, k)))
 draw(matrixHeatmap, column_title = matrixTitle,
      column_title_gp = grid::gpar(fontsize = 10), merge_legends = TRUE)
-walk(tilePages, print)
+walk(tilePages(), print)
 walk(contamPages, print)
 print(glossaryPage())
 invisible(dev.off())
