@@ -19,6 +19,8 @@ REPO=$(dirname "$(dirname "$SDIR")")
 VERSION=$(cat "$SDIR/../VERSION")
 # shellcheck source-path=SCRIPTDIR source=conpairMarkers.sh
 . "$SDIR/conpairMarkers.sh"
+# shellcheck source-path=SCRIPTDIR source=conpairContainer.sh
+. "$SDIR/conpairContainer.sh"
 
 SLURMTOOLS_DIR=${SLURMTOOLS_DIR:-$REPO/slurmTools}
 if [ ! -f "$SLURMTOOLS_DIR/slurmTools.sh" ]; then
@@ -26,7 +28,7 @@ if [ ! -f "$SLURMTOOLS_DIR/slurmTools.sh" ]; then
     exit 1
 fi
 
-CONTAINER="${CONPAIR_SIF:-/home/soccin/Code/ConPair/conpair_v0.3.3.sif}"
+CONTAINER=$(conpairContainer)
 PARTITION=""
 OUTDIR="./qc/conpair"
 
