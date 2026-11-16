@@ -130,8 +130,11 @@ shellcheck -x bin/*.sh conpair/bin/*.sh conpair/tests/*.sh
 ```
 
 The container defaults to `$CONPAIR_SIF`, else
-`/home/soccin/Code/ConPair/conpair_v0.3.3.sif`. `.sif` files are not
-committed.
+`/home/soccin/Code/ConPair/conpair_v0.3.3.sif`, set once in
+`conpair/bin/conpairContainer.sh`; the container argument of every
+conpair script is optional. `tests/compareWithConpair.sh` repeats the
+default inline because, run by sbatch, it cannot locate `bin/`. `.sif`
+files are not committed.
 
 ## Conventions
 
