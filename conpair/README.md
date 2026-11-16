@@ -14,6 +14,7 @@ repository: its NYGC license is single-user and academic only.
 ```
 bin/runConpairCohort.sh    entry point: checks the manifest, submits the jobs
 bin/conpairMarkers.sh      genome build -> Conpair marker files (sourced)
+bin/conpairContainer.sh    default Conpair container (sourced)
 bin/conpairPileup.sh       SLURM array task: GATK Pileup at the markers, one BAM
 bin/conpairAnalyze.sh      SLURM job: conpairCohort.py, then conpairReport.R
 bin/conpairCohort.py       concordance and contamination, in the container
@@ -96,7 +97,15 @@ anything is submitted. BAMs on different builds can be run together when
 they share the markers; each is piled up against its own FASTA.
 
 The container defaults to `$CONPAIR_SIF`, else
-`/home/soccin/Code/ConPair/conpair_v0.3.3.sif`. To pull it again:
+`/home/soccin/Code/ConPair/conpair_v0.3.3.sif` (set in
+`bin/conpairContainer.sh`). The job scripts take the same default, so a
+job resubmitted by hand needs no container argument:
+
+```
+sbatch -t 06:00:00 --partition cmobic_cpu bin/conpairAnalyze.sh OUTDIR
+```
+
+To pull the container again:
 
 ```
 singularity pull conpair_v0.3.3.sif docker://cmopipeline/conpair:v0.3.3

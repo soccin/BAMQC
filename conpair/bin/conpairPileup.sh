@@ -9,26 +9,35 @@
 ## SLURM_ARRAY_TASK_ID of OUTDIR/manifest.tsv, run through Conpair's own
 ## run_gatk_pileup_for_sample.py in the container. The BAM's build and
 ## reference FASTA come from the manifest, written by runConpairCohort.sh,
-## which submits this script.
+## which submits this script. CONTAINER is optional; the default comes
+## from conpairContainer.sh.
 ##
 
 set -euo pipefail
 
+## Under sbatch $0 is SLURM's spool copy; without SBATCH_SCRIPT_DIR (a
+## resubmit by hand) the submitted script's path comes from scontrol.
 if [ -n "${SBATCH_SCRIPT_DIR:-}" ]; then
     SDIR="${SBATCH_SCRIPT_DIR}"
 else
     SDIR=$(dirname "$(readlink -f "$0")")
+    if [ ! -f "$SDIR/conpairMarkers.sh" ] && [ -n "${SLURM_JOB_ID:-}" ]; then
+        SDIR=$(dirname "$(scontrol show job "$SLURM_JOB_ID" | sed -n 's/^ *Command=//p')")
+    fi
 fi
 # shellcheck source-path=SCRIPTDIR source=conpairMarkers.sh
 . "$SDIR/conpairMarkers.sh"
+# shellcheck source-path=SCRIPTDIR source=conpairContainer.sh
+. "$SDIR/conpairContainer.sh"
 
-if [ "$#" != "2" ]; then
-    echo -e "\n   usage: sbatch --array 1-N conpairPileup.sh OUTDIR CONTAINER\n"
+if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
+    echo -e "\n   usage: sbatch --array 1-N conpairPileup.sh OUTDIR [CONTAINER]\n"
     exit 1
 fi
 
 OUTDIR=$1
-CONTAINER=$2
+CONTAINER=${2:-$(conpairContainer)}
+[ -f "$CONTAINER" ] || { echo "ERROR: container not found: $CONTAINER" >&2; exit 1; }
 TASK=${SLURM_ARRAY_TASK_ID:?must run as a SLURM array task}
 
 ROW=$(awk -F'\t' -v n=$((TASK + 1)) 'NR==n' "$OUTDIR/manifest.tsv")
@@ -65,6 +74,7 @@ echo "  fingerprint  $FINGERPRINT"
 echo "  build        $BUILD"
 echo "  fasta        $FASTA"
 echo "  output       $PILEUP"
+echo "  container    $CONTAINER"
 echo "  bin          $SDIR"
 
 if [ -s "$PILEUP" ] && [ -f "$FINGERPRINT_FILE" ] \

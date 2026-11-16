@@ -8,27 +8,36 @@
 ## Concordance and contamination for every sample in OUTDIR/manifest.tsv
 ## (conpairCohort.py, in the container), then the report (conpairReport.R,
 ## host R). Submitted by runConpairCohort.sh after the pileups finish; can
-## also be resubmitted by hand, outside the run's record.
+## also be resubmitted by hand, outside the run's record. CONTAINER is
+## optional; the default comes from conpairContainer.sh.
 ##
 
 set -euo pipefail
 
+## Under sbatch $0 is SLURM's spool copy; without SBATCH_SCRIPT_DIR (a
+## resubmit by hand) the submitted script's path comes from scontrol.
 if [ -n "${SBATCH_SCRIPT_DIR:-}" ]; then
     SDIR="${SBATCH_SCRIPT_DIR}"
 else
     SDIR=$(dirname "$(readlink -f "$0")")
+    if [ ! -f "$SDIR/conpairMarkers.sh" ] && [ -n "${SLURM_JOB_ID:-}" ]; then
+        SDIR=$(dirname "$(scontrol show job "$SLURM_JOB_ID" | sed -n 's/^ *Command=//p')")
+    fi
 fi
 REPO=$(dirname "$(dirname "$SDIR")")
 # shellcheck source-path=SCRIPTDIR source=conpairMarkers.sh
 . "$SDIR/conpairMarkers.sh"
+# shellcheck source-path=SCRIPTDIR source=conpairContainer.sh
+. "$SDIR/conpairContainer.sh"
 
-if [ "$#" != "2" ]; then
-    echo -e "\n   usage: sbatch conpairAnalyze.sh OUTDIR CONTAINER\n"
+if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
+    echo -e "\n   usage: sbatch conpairAnalyze.sh OUTDIR [CONTAINER]\n"
     exit 1
 fi
 
 OUTDIR=$1
-CONTAINER=$2
+CONTAINER=${2:-$(conpairContainer)}
+[ -f "$CONTAINER" ] || { echo "ERROR: container not found: $CONTAINER" >&2; exit 1; }
 
 ## The markers follow from the builds in the manifest; runConpairCohort.sh
 ## has already checked that they all share one marker set.
@@ -44,9 +53,10 @@ MARKERS_TXT=$MARKER_SETS.txt
 command -v Rscript > /dev/null || { echo "ERROR: Rscript not on PATH" >&2; exit 1; }
 
 echo "Start: conpairAnalyze $(date)"
-echo "  output   $OUTDIR"
-echo "  markers  $MARKERS_TXT"
-echo "  bin      $SDIR"
+echo "  output     $OUTDIR"
+echo "  markers    $MARKERS_TXT"
+echo "  container  $CONTAINER"
+echo "  bin        $SDIR"
 
 singularity exec --cleanenv \
     --bind "$OUTDIR" \
